@@ -1,0 +1,27 @@
+all:
+  hosts:
+    pinode1:
+      ansible_host: pinode1.local
+      ansible_user: dan
+    pinode2:
+      ansible_host: pinode2.local
+      ansible_user: dan
+    pinode3:
+      ansible_host: pinode3.local
+      ansible_user: dan
+    pinode4:
+      ansible_host: pinode4.local
+      ansible_user: dan
+  vars:
+    ansible_become: yes
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    nomad_servers:
+      hosts:
+        pinode1:
+    nomad_clients:
+      hosts:
+        pinode2:
+        pinode3:
+        pinode4:
