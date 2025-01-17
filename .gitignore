@@ -1,4 +1,1 @@
-licenses/consul/*
-licenses/nomad/*
-licenses/tfe/*
-licenses/vault/*
+*.hclic
