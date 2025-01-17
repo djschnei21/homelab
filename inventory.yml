@@ -13,7 +13,6 @@ all:
       ansible_host: pinode4.local
       ansible_user: dan
   vars:
-    ansible_become: yes
     ansible_python_interpreter: /usr/bin/python3
 
   children:
