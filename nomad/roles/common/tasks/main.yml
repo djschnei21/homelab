@@ -1,0 +1,26 @@
+---
+- name: Install prerequisite packages
+  apt:
+    name:
+      - wget
+      - gpg
+      - cgroup-tools
+    state: present
+
+- name: Add HashiCorp GPG key (if not already present)
+  ansible.builtin.shell: >
+    wget -O - https://apt.releases.hashicorp.com/gpg |
+    gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  args:
+    creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+- name: Add HashiCorp repository
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=arm64 signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com bookworm main"
+    state: present
+    filename: hashicorp
+
+- name: Install Nomad
+  apt:
+    name: nomad-enterprise
+    state: present

@@ -1,0 +1,18 @@
+---
+- name: Apply Common Role (Install Nomad on all hosts)
+  hosts: all
+  become: yes
+  roles:
+    - common
+
+- name: Configure Nomad Servers
+  hosts: nomad_servers
+  become: yes
+  roles:
+    - nomad_server
+
+- name: Configure Nomad Clients
+  hosts: nomad_clients
+  become: yes
+  roles:
+    - nomad_client
