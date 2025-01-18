@@ -24,3 +24,8 @@
   apt:
     name: nomad-enterprise
     state: present
+
+- name: Enable Nomad
+  service:
+    name: nomad
+    enabled: yes
