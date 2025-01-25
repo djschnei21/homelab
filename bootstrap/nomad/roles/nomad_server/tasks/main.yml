@@ -36,7 +36,7 @@
 
 - name: Copy Nomad Enterprise license to server node
   copy:
-    src: license.hclic
+    src: nomad.hclic
     dest: /etc/nomad.d/license.hclic
     owner: nomad
     group: nomad
