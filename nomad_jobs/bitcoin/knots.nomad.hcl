@@ -31,10 +31,11 @@ job "knots" {
         args    = [
           "-datadir=/data",
           "-server=1",
+          "-txindex=1",
           "-rpcbind=0.0.0.0",
-          "-rpcport=8332",  # Knots RPC port for internal use
+          "-rpcport=8332",
           "-rpcallowip=0.0.0.0/0",
-          "-port=8333"      # Knots P2P port for internal use
+          "-port=8333"
         ]
         ports = ["bitcoin_rpc","bitcoin_p2p"]
       }
