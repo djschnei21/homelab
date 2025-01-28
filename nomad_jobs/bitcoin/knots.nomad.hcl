@@ -1,5 +1,6 @@
 job "knots" {
   datacenters = ["homelab"]
+  namespace = "bitcoin"
 
   group "knots" {
 
@@ -13,11 +14,12 @@ job "knots" {
     }
 
     network {
+      mode = "bridge" 
       port "bitcoin_rpc" {
-        static = 8332
+        to = 8332
       }
       port "bitcoin_p2p" {
-        static = 8333
+        to = 8333
       }
     }
 
@@ -55,6 +57,13 @@ job "knots" {
         tags     = ["knots"]
         port     = "bitcoin_rpc"
         provider = "nomad"
+
+        check {
+          type     = "tcp"
+          port     = "bitcoin_rpc"
+          interval = "10s"
+          timeout  = "2s"
+        }
       }
 
       service {
@@ -62,6 +71,13 @@ job "knots" {
         tags     = ["knots"]
         port     = "bitcoin_p2p"
         provider = "nomad"
+
+        check {
+          type     = "tcp"
+          port     = "bitcoin_p2p"
+          interval = "10s"
+          timeout  = "2s"
+        }
       }
     }
   }

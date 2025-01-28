@@ -1,5 +1,6 @@
 job "electrs" {
   datacenters = ["homelab"]
+  namespace = "bitcoin"
 
   group "electrs" {
 
@@ -22,8 +23,59 @@ job "electrs" {
     }
 
     network {
+      mode = "bridge"
       port "electrs_rpc" {
+        to = 50001
         static = 50001  # Electrs RPC port to expose outside the group
+      }
+    }
+
+    task "wait-for-sync" {
+      lifecycle {
+        hook = "prestart"
+        sidecar = false
+      }
+
+      driver = "docker"
+
+      volume_mount {
+        volume      = "bitcoin-data"
+        destination = "/data/bitcoin"
+        read_only   = true
+      }
+
+      template {
+        data = <<EOF
+          {{ range nomadService "bitcoin-rpc" }}
+          BITCOIN_HOST="{{ .Address }}"
+          BITCOIN_PORT="{{ .Port }}"
+          {{ end }}
+          EOF
+        destination = "local/env.txt"
+        env         = true
+      }
+
+      config {
+        image = "djschnei/knots:latest"
+        command = "/bin/sh"
+        args = [
+          "-c",
+          <<-EOH
+          while true; do
+            PROGRESS=$(/usr/local/bin/bitcoin-cli \
+              -datadir=/data/bitcoin \
+              -rpcconnect=${BITCOIN_HOST} \
+              -rpcport=${BITCOIN_PORT} \
+              getblockchaininfo | jq -r '.verificationprogress')
+            echo "Bitcoin sync progress: $PROGRESS"
+            if [ "$PROGRESS" = "1.0" ]; then
+              echo "Bitcoin sync complete!"
+              break
+            fi
+            sleep 60
+          done
+          EOH
+        ]
       }
     }
 

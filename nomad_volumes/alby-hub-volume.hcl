@@ -2,6 +2,7 @@ type = "csi"
 id = "albyhub-data"
 name = "albyhub-data"
 plugin_id = "nfs"
+namespace = "bitcoin"
 
 capability {
   access_mode = "single-node-writer"

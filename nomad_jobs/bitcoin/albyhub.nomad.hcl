@@ -1,5 +1,6 @@
 job "albyhub" {
   datacenters = ["homelab"]
+  namespace = "bitcoin"
 
   group "albyhub-group" {
     
@@ -12,6 +13,7 @@ job "albyhub" {
     }
 
     network {
+      mode = "bridge"
       port "http" {}
     }
 
@@ -44,7 +46,7 @@ job "albyhub" {
 
       resources {
         cpu    = 500     # CPU in MHz
-        memory = 2048    # Memory in MB
+        memory = 1024    # Memory in MB
       }
     }
     

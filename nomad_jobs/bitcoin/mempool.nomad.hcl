@@ -1,8 +1,10 @@
 job "mempool" {
   datacenters = ["homelab"]
+  namespace = "bitcoin"
 
   group "db" {
     network {
+      mode = "bridge"
       port "mysql" {
         to = 3306
       }
@@ -52,6 +54,7 @@ job "mempool" {
     }
 
     network {
+      mode = "bridge"
       port "api" {
         to = 8999
       }
@@ -103,7 +106,14 @@ job "mempool" {
 
       config {
         image = "mempool/backend:latest"
-        command = "./wait-for-it.sh ${DATABASE_HOST}:${DATABASE_PORT} --timeout=720 --strict -- ./start.sh"
+        command = "./wait-for-it.sh"
+        args = [
+          "${DATABASE_HOST}:${DATABASE_PORT}",
+          "--timeout=720",
+          "--strict",
+          "--",
+          "./start.sh"
+        ] 
         ports = ["frontend"]
       }
 
@@ -123,6 +133,7 @@ job "mempool" {
 
   group "frontend" {
     network {
+      mode = "bridge"
       port "http" {
         to = 8080
       }
