@@ -15,7 +15,7 @@ capability {
 }
 
 context {
-  server = "192.168.0.2"
+  server = "192.168.0.3"
   share = "/mnt/homelab-general/bitcoin-data"
 }
 
