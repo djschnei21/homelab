@@ -49,7 +49,7 @@ job "knots" {
       }
 
       resources {
-        memory = 2048
+        memory = 4096
       }
 
       service {
