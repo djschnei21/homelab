@@ -20,13 +20,13 @@ job "albyhub" {
     task "albyhub" {
       driver = "docker"
 
-      # template {
-      #   destination = "${NOMAD_SECRETS_DIR}/env.txt"
-      #   env         = true
-      #   data        = <<EOT
-      #   AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/albyhub" }}{{ .password }}{{ end }}
-      #   EOT
-      # }
+      template {
+        destination = "${NOMAD_SECRETS_DIR}/env.txt"
+        env         = true
+        data        = <<EOT
+        AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/albyhub" }}{{ .password }}{{ end }}
+        EOT
+      }
 
       volume_mount {
         volume      = "albyhub-data"
