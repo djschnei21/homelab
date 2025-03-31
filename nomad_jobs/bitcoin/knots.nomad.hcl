@@ -3,6 +3,14 @@ job "knots" {
   namespace = "bitcoin"
 
   group "knots" {
+    reschedule {
+      attempts       = 15
+      interval       = "1h"
+      delay          = "30s"
+      delay_function = "exponential"
+      max_delay      = "120s"
+      unlimited      = false
+    }
 
     # Define the shared volume for Bitcoin data
     volume "bitcoin-data" {
@@ -50,6 +58,7 @@ job "knots" {
 
       resources {
         memory = 4096
+        cpu = 1500
       }
 
       service {

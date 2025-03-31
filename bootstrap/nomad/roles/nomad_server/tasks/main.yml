@@ -34,13 +34,6 @@
     path: /usr/share/keyrings/docker-archive-keyring.gpg
     state: absent
 
-- name: Copy Nomad Enterprise license to server node
-  copy:
-    src: nomad.hclic
-    dest: /etc/nomad.d/license.hclic
-    owner: nomad
-    group: nomad
-
 - name: Create Nomad server configuration
   template:
     src: server.hcl.j2

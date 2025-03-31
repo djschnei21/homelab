@@ -14,11 +14,11 @@ capability {
   attachment_mode = "file-system"
 }
 
-context {
+parameters {
   server = "192.168.0.3"
   share = "/mnt/homelab-general/bitcoin-data"
 }
 
 mount_options {
   fs_type = "nfs"
-} 
+}

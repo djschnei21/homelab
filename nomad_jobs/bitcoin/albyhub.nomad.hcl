@@ -3,12 +3,20 @@ job "albyhub" {
   namespace = "bitcoin"
 
   group "albyhub-group" {
+    reschedule {
+      attempts       = 15
+      interval       = "1h"
+      delay          = "30s"
+      delay_function = "exponential"
+      max_delay      = "120s"
+      unlimited      = false
+    }
     
     volume "albyhub-data" {
       type      = "csi"
       read_only = false
       attachment_mode = "file-system"
-      access_mode = "multi-node-single-writer"
+      access_mode = "single-node-writer"
       source    = "albyhub-data"
     }
 
@@ -40,7 +48,7 @@ job "albyhub" {
       }
 
       config {
-        image = "ghcr.io/getalby/hub:v1.13.0"
+        image = "ghcr.io/getalby/hub:v1.15.0"
         ports = ["http"]
       }
 

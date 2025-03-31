@@ -13,6 +13,7 @@ job "plugin-nfs-controller" {
         "--logtostderr",
         "-v=5",
       ]
+      privileged = true
     }
 
     csi_plugin {

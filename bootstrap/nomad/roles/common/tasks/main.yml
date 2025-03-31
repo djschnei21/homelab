@@ -5,6 +5,7 @@
       - wget
       - gpg
       - cgroup-tools
+      - nfs-common
     state: present
 
 - name: Add HashiCorp GPG key (if not already present)
@@ -22,7 +23,7 @@
 
 - name: Install Nomad
   apt:
-    name: nomad-enterprise
+    name: nomad
     state: present
 
 - name: Enable Nomad

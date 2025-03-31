@@ -24,11 +24,3 @@ all:
         pinode2:
         pinode3:
         pinode4:
-    consul_servers:
-      hosts:
-        pinode1:
-    consul_clients:
-      hosts:
-        pinode2:
-        pinode3:
-        pinode4:
