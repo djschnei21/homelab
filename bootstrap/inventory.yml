@@ -1,8 +1,8 @@
 all:
   hosts:
-    pinode1:
-      ansible_host: pinode1.local
-      ansible_user: dan
+    # pinode1:
+    #   ansible_host: pinode1.local
+    #   ansible_user: dan
     pinode2:
       ansible_host: pinode2.local
       ansible_user: dan
@@ -18,9 +18,8 @@ all:
   children:
     nomad_servers:
       hosts:
-        pinode1:
+        pinode2:
     nomad_clients:
       hosts:
-        pinode2:
         pinode3:
         pinode4:

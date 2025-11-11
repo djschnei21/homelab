@@ -10,7 +10,7 @@ capability {
 }
 
 parameters {
-  server = "192.168.0.3"
+  server = "192.168.68.50"
   share = "/mnt/homelab-general/albyhub-data"
 }
 
