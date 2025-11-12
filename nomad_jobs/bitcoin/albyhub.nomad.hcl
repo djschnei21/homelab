@@ -22,7 +22,9 @@ job "albyhub" {
 
     network {
       mode = "bridge"
-      port "http" {}
+      port "http" {
+        to = 8080
+      }
     }
 
     task "albyhub" {
@@ -44,11 +46,10 @@ job "albyhub" {
 
       env {
         WORK_DIR = "/data"
-        PORT = "${NOMAD_PORT_http}"
       }
 
       config {
-        image = "ghcr.io/getalby/hub:v1.19.3"
+        image = "ghcr.io/getalby/hub:v1.20.0"
         ports = ["http"]
       }
 
