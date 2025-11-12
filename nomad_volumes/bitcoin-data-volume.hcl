@@ -14,7 +14,7 @@ capability {
   attachment_mode = "file-system"
 }
 
-parameters {
+context {
   server = "192.168.68.50"
   share = "/mnt/homelab-general/bitcoin-data"
 }
