@@ -7,7 +7,7 @@ job "plugin-nfs-nodes" {
     task "plugin" {
     driver = "docker"
     config {
-      image = "mcr.microsoft.com/k8s/csi/nfs-csi:latest"
+      image = "registry.k8s.io/sig-storage/nfsplugin:v4.12.1"
       args = [
         "--endpoint=unix://csi/csi.sock",
         "--nodeid=${attr.unique.hostname}",
