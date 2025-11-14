@@ -1,7 +1,7 @@
 ---
 - name: Set architecture fact
   set_fact:
-    arch_cni: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    arch_cni: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
 
 - name: Set CNI version
   set_fact:
@@ -43,7 +43,7 @@
 
 - name: Add Docker repository
   ansible.builtin.apt_repository:
-    repo: "deb [arch={{ 'arm64' if ansible_architecture == 'aarch64' else ansible_architecture }} signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian {{ ansible_lsb.codename }} stable"
+    repo: "deb [arch={{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else ansible_facts['architecture'] }} signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian {{ ansible_facts.lsb.codename }} stable"
     state: present
     filename: docker
 

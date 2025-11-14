@@ -34,7 +34,8 @@ job "albyhub" {
         destination = "${NOMAD_SECRETS_DIR}/env.txt"
         env         = true
         data        = <<EOT
-        AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/albyhub" }}{{ .password }}{{ end }}
+        AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/albyhub" }}{{ .AUTO_UNLOCK_PASSWORD }}{{ end }}
+        DATABASE_URI=postgresql://albyhub:{{ with nomadVar "nomad/jobs/albyhub" }}{{ .DB_PASSWORD }}{{ end }}@192.168.68.50:5432/nwc?sslmode=disable
         EOT
       }
 

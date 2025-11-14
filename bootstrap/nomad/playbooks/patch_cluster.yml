@@ -1,0 +1,53 @@
+---
+- name: Patch Nomad Clients
+  hosts: nomad_clients
+  serial: 1
+  become: true
+  tasks:
+    - name: Drain the node
+      command: nomad node drain -enable -self -yes
+
+    - name: Wait for node to drain completely
+      command: nomad node status -self -json
+      register: node_info
+      until: (node_info.stdout | from_json).LastDrain.Status == 'complete'
+      retries: 60  # Adjust based on expected drain time
+      delay: 10
+
+    - name: Update package cache and upgrade packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Reboot the machine
+      reboot:
+        reboot_timeout: 600
+        connect_timeout: 300
+        test_command: uptime
+
+    - name: Wait for Nomad to be ready after reboot
+      command: nomad node status -self
+      register: nomad_ready
+      until: nomad_ready.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Undrain the node
+      command: nomad node drain -disable -self -yes
+
+- name: Patch Nomad Server
+  hosts: nomad_servers
+  become: true
+  tasks:
+    - name: Update package cache and upgrade packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Reboot the machine
+      reboot:
+        reboot_timeout: 600
+        connect_timeout: 300
+        test_command: uptime
