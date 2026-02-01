@@ -38,7 +38,8 @@ job "bitcoin" {
       driver = "docker"
 
       config {
-        image = "bitcoin/bitcoin:latest"
+        image      = "bitcoin/bitcoin:latest"
+        force_pull = true
 
         entrypoint = ["bitcoind"]
 
