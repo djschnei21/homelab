@@ -27,6 +27,7 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
 - `bootstrap/` - Ansible playbooks and roles for cluster initialization
   - `inventory.yml` - Node definitions
   - `nomad/roles/` - common, nomad_server, nomad_client roles
+  - `nomad/playbooks/` - Operational playbooks (patching, maintenance)
 - `nomad_jobs/` - Nomad job definitions (HCL)
   - `bitcoin/` - Bitcoin-related service jobs
   - `plugins/` - NFS CSI controller and node plugin jobs
@@ -89,3 +90,17 @@ the same HCL won't create a new version. To force a new job version:
 
 This is useful when you need to update the job definition stored in Nomad (e.g., after
 cleaning up comments) without changing the functional config.
+
+## Cluster Maintenance
+
+**Patch all nodes (OS, Nomad, Docker):**
+```bash
+cd bootstrap/nomad && ansible-playbook -i ../inventory.yml playbooks/patch_cluster.yml
+```
+
+The playbook handles rolling updates safely:
+1. Pre-flight check verifies cluster health
+2. Clients patched one-by-one: drain (15m deadline) → apt upgrade → reboot if needed → rejoin
+3. Server patched last with health verification
+
+Nodes only reboot when `/var/run/reboot-required` exists or packages changed.
