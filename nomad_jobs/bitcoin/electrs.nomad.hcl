@@ -49,9 +49,8 @@ EOF
       }
 
       config {
-        image      = "getumbrel/electrs:v0.10.10"
-        force_pull = true
-        args       = [
+        image = "getumbrel/electrs:v0.10.10"
+        args  = [
           "--log-filters", "INFO",
           "--db-dir", "/data/electrs",
           "--daemon-dir", "/data/bitcoin",
