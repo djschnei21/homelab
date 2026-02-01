@@ -4,7 +4,6 @@ job "electrs" {
 
   group "electrs" {
 
-    # Define the shared volume for Bitcoin data
     volume "bitcoin-data" {
       type      = "csi"
       read_only = true
@@ -13,7 +12,6 @@ job "electrs" {
       source    = "bitcoin-data"
     }
 
-    # Define the Electrs-specific volume
     volume "electrs-data" {
       type      = "csi"
       read_only = false
@@ -26,7 +24,7 @@ job "electrs" {
       mode = "bridge"
       port "electrs_rpc" {
         to = 50001
-        static = 50001  # Electrs RPC port to expose outside the group
+        static = 50001
       }
     }
 
@@ -82,7 +80,6 @@ job "electrs" {
     #   user = "3001:3001"
     # }
 
-    # Electrs task (starts after wait-for-knots completes)
     task "electrs" {
       driver = "docker"
 
@@ -105,9 +102,9 @@ EOF
           "--log-filters", "INFO",
           "--db-dir", "/data/electrs",
           "--daemon-dir", "/data/bitcoin",
-          "--daemon-rpc-addr", "${BITCOIN_RPC}",  # Internal communication with Knots
-          "--daemon-p2p-addr", "${BITCOIN_P2P}",  # Internal communication with Knots
-          "--electrum-rpc-addr", "0.0.0.0:${NOMAD_PORT_electrs_rpc}"  # Electrs RPC exposed
+          "--daemon-rpc-addr", "${BITCOIN_RPC}",
+          "--daemon-p2p-addr", "${BITCOIN_P2P}",
+          "--electrum-rpc-addr", "0.0.0.0:${NOMAD_PORT_electrs_rpc}"
         ]
         ports = ["electrs_rpc"]
       }
