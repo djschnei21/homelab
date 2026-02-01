@@ -1,53 +1,148 @@
 ---
+- name: Pre-flight cluster health check
+  hosts: nomad_servers
+  become: false
+  tasks:
+    - name: Verify Nomad cluster is healthy
+      command: nomad server members
+      register: cluster_status
+      failed_when: "'alive' not in cluster_status.stdout"
+      changed_when: false
+
+    - name: Verify all clients are ready
+      command: nomad node status
+      register: node_status
+      changed_when: false
+
+    - name: Display cluster status
+      debug:
+        msg: "{{ node_status.stdout_lines }}"
+
 - name: Patch Nomad Clients
   hosts: nomad_clients
   serial: 1
   become: true
   tasks:
-    - name: Drain the node
-      command: nomad node drain -enable -self -yes
-
-    - name: Wait for node to drain completely
+    - name: Get node ID
       command: nomad node status -self -json
-      register: node_info
-      until: (node_info.stdout | from_json).LastDrain.Status == 'complete'
-      retries: 60  # Adjust based on expected drain time
+      register: node_info_raw
+      changed_when: false
+
+    - name: Parse node info
+      set_fact:
+        node_id: "{{ (node_info_raw.stdout | from_json).ID }}"
+        node_name: "{{ (node_info_raw.stdout | from_json).Name }}"
+
+    - name: Display node being patched
+      debug:
+        msg: "Patching node {{ node_name }} ({{ node_id }})"
+
+    - name: Enable drain with deadline
+      command: nomad node drain -enable -deadline 15m -yes -self
+      register: drain_result
+
+    - name: Wait for drain to complete
+      command: nomad node status -self -json
+      register: drain_status
+      until: >
+        (drain_status.stdout | from_json).SchedulingEligibility == 'ineligible' and
+        ((drain_status.stdout | from_json).DrainStrategy == None or
+         (drain_status.stdout | from_json).LastDrain.Status == 'complete')
+      retries: 90
       delay: 10
+      changed_when: false
 
     - name: Update package cache and upgrade packages
       apt:
         update_cache: yes
         upgrade: dist
+      register: apt_result
 
-    - name: Reboot the machine
+    - name: Check if reboot is required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Reboot if required
       reboot:
         reboot_timeout: 600
         connect_timeout: 300
         test_command: uptime
+      when: reboot_required.stat.exists or apt_result.changed
 
-    - name: Wait for Nomad to be ready after reboot
-      command: nomad node status -self
-      register: nomad_ready
-      until: nomad_ready.rc == 0
+    - name: Wait for Nomad agent to be ready
+      command: nomad node status -self -json
+      register: nomad_status
+      until: nomad_status.rc == 0
       retries: 30
       delay: 10
       changed_when: false
-      ignore_errors: yes
 
-    - name: Undrain the node
-      command: nomad node drain -disable -self -yes
+    - name: Disable drain (make node eligible)
+      command: nomad node drain -disable -yes -self
+
+    - name: Wait for node to be eligible
+      command: nomad node status -self -json
+      register: eligibility_status
+      until: (eligibility_status.stdout | from_json).SchedulingEligibility == 'eligible'
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Wait for allocations to be placed and healthy
+      block:
+        - name: Give scheduler time to place allocations
+          pause:
+            seconds: 30
+
+        - name: Check node has running allocations
+          shell: nomad node status -self -json | jq '.Allocations | length'
+          register: alloc_count
+          changed_when: false
+
+        - name: Display allocation count
+          debug:
+            msg: "Node {{ node_name }} has {{ alloc_count.stdout }} allocations"
 
 - name: Patch Nomad Server
   hosts: nomad_servers
   become: true
   tasks:
+    - name: Display server being patched
+      debug:
+        msg: "Patching Nomad server {{ inventory_hostname }}"
+
     - name: Update package cache and upgrade packages
       apt:
         update_cache: yes
         upgrade: dist
+      register: apt_result
 
-    - name: Reboot the machine
+    - name: Check if reboot is required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Reboot if required
       reboot:
         reboot_timeout: 600
         connect_timeout: 300
         test_command: uptime
+      when: reboot_required.stat.exists or apt_result.changed
+
+    - name: Wait for Nomad server to be ready
+      command: nomad server members
+      register: server_status
+      until: server_status.rc == 0 and 'alive' in server_status.stdout
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Verify all clients reconnected
+      command: nomad node status
+      register: final_node_status
+      changed_when: false
+
+    - name: Display final cluster status
+      debug:
+        msg: "{{ final_node_status.stdout_lines }}"
