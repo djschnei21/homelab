@@ -89,20 +89,20 @@
       delay: 5
       changed_when: false
 
-    - name: Wait for allocations to be placed and healthy
+    - name: Wait for allocations to be placed
       block:
         - name: Give scheduler time to place allocations
           pause:
             seconds: 30
 
-        - name: Check node has running allocations
-          shell: nomad node status -self -json | jq '.Allocations | length'
-          register: alloc_count
+        - name: Get node allocation status
+          command: nomad node status -self -json
+          register: node_alloc_status
           changed_when: false
 
         - name: Display allocation count
           debug:
-            msg: "Node {{ node_name }} has {{ alloc_count.stdout }} allocations"
+            msg: "Node {{ node_name }} has {{ (node_alloc_status.stdout | from_json).Allocations | default([]) | length }} allocations"
 
 - name: Patch Nomad Server
   hosts: nomad_servers
