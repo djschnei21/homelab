@@ -2,6 +2,10 @@ job "electrs" {
   datacenters = ["homelab"]
   namespace = "bitcoin"
 
+  meta {
+    version = "2026-02-01.1"
+  }
+
   group "electrs" {
 
     volume "bitcoin-data" {
@@ -27,58 +31,6 @@ job "electrs" {
         static = 50001
       }
     }
-
-    # task "wait-for-sync" {
-    #   lifecycle {
-    #     hook = "prestart"
-    #     sidecar = false
-    #   }
-
-    #   driver = "docker"
-
-    #   volume_mount {
-    #     volume      = "bitcoin-data"
-    #     destination = "/data/bitcoin"
-    #     read_only   = true
-    #   }
-
-    #   template {
-    #     data = <<EOF
-    #       {{ range nomadService "bitcoin-rpc" }}
-    #       BITCOIN_HOST="{{ .Address }}"
-    #       BITCOIN_PORT="{{ .Port }}"
-    #       {{ end }}
-    #       EOF
-    #     destination = "local/env.txt"
-    #     env         = true
-    #   }
-
-    #   config {
-    #     image = "bitcoin/bitcoin:latest"
-    #     entrypoint = [""]
-    #     command = "/bin/sh"
-    #     args = [
-    #       "-c",
-    #       <<-EOH
-    #       while true; do
-    #         PROGRESS=$(bitcoin-cli \
-    #           -datadir=/data/bitcoin \
-    #           -rpcconnect=${BITCOIN_HOST} \
-    #           -rpcport=${BITCOIN_PORT} \
-    #           getblockchaininfo | jq -r '.verificationprogress')
-    #         echo "Bitcoin sync progress: $PROGRESS"
-    #         if [ "$PROGRESS" = "1.0" ]; then
-    #           echo "Bitcoin sync complete!"
-    #           break
-    #         fi
-    #         sleep 60
-    #       done
-    #       EOH
-    #     ]
-    #   }
-
-    #   user = "3001:3001"
-    # }
 
     task "electrs" {
       driver = "docker"

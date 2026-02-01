@@ -2,6 +2,10 @@ job "albyhub" {
   datacenters = ["homelab"]
   namespace = "bitcoin"
 
+  meta {
+    version = "2026-02-01"
+  }
+
   group "albyhub-group" {
     reschedule {
       attempts       = 15

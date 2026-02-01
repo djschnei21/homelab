@@ -2,6 +2,10 @@ job "bitcoin" {
   datacenters = ["homelab"]
   namespace   = "bitcoin"
 
+  meta {
+    version = "2026-02-01"
+  }
+
   group "bitcoin" {
     reschedule {
       attempts       = 15
