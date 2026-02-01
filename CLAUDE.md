@@ -104,3 +104,26 @@ The playbook handles rolling updates safely:
 3. Server patched last with health verification
 
 Nodes only reboot when `/var/run/reboot-required` exists or packages changed.
+
+## Rebalancing Jobs
+
+After rolling updates or node maintenance, jobs may end up unevenly distributed. The cluster
+uses the `spread` scheduler algorithm, but it only applies when placing new allocations.
+
+To rebalance jobs across nodes:
+
+1. Get the running allocation ID for each job:
+   ```bash
+   nomad job status -namespace=bitcoin <job-name> | grep "run.*running"
+   ```
+
+2. Stop each allocation to force rescheduling:
+   ```bash
+   nomad alloc stop -namespace=bitcoin <alloc-id>
+   ```
+
+The scheduler will place new allocations using the spread algorithm. This is disruptive
+(brief downtime per job) so only run when rebalancing is needed.
+
+Note: `nomad job eval -force-reschedule` does NOT move healthy allocations. You must
+use `nomad alloc stop` to force actual rescheduling.
