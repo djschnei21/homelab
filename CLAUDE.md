@@ -16,7 +16,6 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
 **Services:**
 - Bitcoin Core full node with RPC/P2P and transaction indexing
 - Electrs - Electrum protocol server (discovers Bitcoin via Nomad service templates)
-- Esplora - Block explorer
 - Alby Hub - Lightning wallet manager with PostgreSQL backend
 
 **Storage:**
@@ -36,14 +35,19 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
 
 ## Commands
 
+Nomad server runs on pinode2. Set the address:
+```bash
+export NOMAD_ADDR=http://pinode2.local:4646
+```
+
 **Deploy a Nomad job:**
 ```bash
-nomad job run nomad_jobs/bitcoin/bitcoin.nomad.hcl
+nomad job run -namespace=bitcoin nomad_jobs/bitcoin/bitcoin.nomad.hcl
 ```
 
 **Check job status:**
 ```bash
-nomad job status <job-name>
+nomad job status -namespace=bitcoin <job-name>
 ```
 
 **View job logs:**
@@ -53,7 +57,12 @@ nomad alloc logs <alloc-id>
 
 **Plan changes before deploy:**
 ```bash
-nomad job plan nomad_jobs/bitcoin/bitcoin.nomad.hcl
+nomad job plan -namespace=bitcoin nomad_jobs/bitcoin/bitcoin.nomad.hcl
+```
+
+**Restart a job (re-pulls image):**
+```bash
+nomad job restart -namespace=bitcoin bitcoin
 ```
 
 **Bootstrap cluster (Ansible):**
@@ -68,3 +77,15 @@ cd bootstrap/nomad && ansible-playbook -i ../inventory.yml nomad_cluster.yml
 - All services use bridge networking with explicit port mappings
 - Volumes use `multi-node-single-writer` access mode for read-only sharing across tasks
 - Jobs define resource constraints (memory/CPU) and health checks
+- Use pinned image versions (e.g., `bitcoin:30.2`), not `latest`
+
+## Forcing Job Updates
+
+Jobs include a `meta.version` field. Nomad deduplicates identical jobs, so re-submitting
+the same HCL won't create a new version. To force a new job version:
+
+1. Bump `meta.version` in the job file
+2. Run `nomad job run -namespace=bitcoin <job>.nomad.hcl`
+
+This is useful when you need to update the job definition stored in Nomad (e.g., after
+cleaning up comments) without changing the functional config.
