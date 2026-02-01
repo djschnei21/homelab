@@ -50,7 +50,7 @@ job "albyhub" {
       }
 
       config {
-        image = "ghcr.io/getalby/hub:v1.20.0"
+        image = "ghcr.io/getalby/hub:v1.21.0"
         ports = ["http"]
       }
 
