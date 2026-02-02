@@ -17,9 +17,11 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
 - Bitcoin Core full node with RPC/P2P and transaction indexing
 - Electrs - Electrum protocol server (discovers Bitcoin via Nomad service templates)
 - Alby Hub - Lightning wallet manager with PostgreSQL backend
+- Prometheus + Grafana - Metrics collection and visualization (default namespace)
+- Node Exporter - OS-level metrics from each client node (system job)
 
 **Storage:**
-- NFS-backed CSI volumes hosted on external server (192.168.68.50)
+- NFS-backed CSI volumes hosted on TrueNAS server (nas2.local / 192.168.68.50)
 - PostgreSQL database for Alby Hub on same external server
 
 ## Repository Structure
@@ -30,6 +32,7 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
   - `nomad/playbooks/` - Operational playbooks (patching, maintenance)
 - `nomad_jobs/` - Nomad job definitions (HCL)
   - `bitcoin/` - Bitcoin-related service jobs
+  - `observability/` - Prometheus, Grafana, and node-exporter jobs
   - `plugins/` - NFS CSI controller and node plugin jobs
 - `nomad_namespaces/` - Namespace definitions (bitcoin-ns)
 - `nomad_volumes/` - CSI volume definitions for persistent storage
@@ -127,3 +130,30 @@ The scheduler will place new allocations using the spread algorithm. This is dis
 
 Note: `nomad job eval -force-reschedule` does NOT move healthy allocations. You must
 use `nomad alloc stop` to force actual rescheduling.
+
+## TrueNAS Storage Management
+
+Storage is hosted on TrueNAS (nas2.local / 192.168.68.50). Manage datasets and NFS shares
+via SSH using the `midclt` command.
+
+**Create a dataset:**
+```bash
+ssh dan@nas2.local 'midclt call pool.dataset.create "{\"name\": \"homelab-general/<dataset-name>\"}"'
+```
+
+**Create an NFS share:**
+```bash
+ssh dan@nas2.local 'midclt call sharing.nfs.create "{\"path\": \"/mnt/homelab-general/<dataset-name>\", \"comment\": \"<description>\", \"networks\": [\"192.168.68.0/24\"], \"mapall_user\": \"root\", \"mapall_group\": \"wheel\"}"'
+```
+
+**List existing NFS shares:**
+```bash
+ssh dan@nas2.local 'midclt call sharing.nfs.query' | jq
+```
+
+**Delete an NFS share (by ID):**
+```bash
+ssh dan@nas2.local 'midclt call sharing.nfs.delete <share-id>'
+```
+
+After creating storage, register a CSI volume in Nomad (see `nomad_volumes/` for examples).
