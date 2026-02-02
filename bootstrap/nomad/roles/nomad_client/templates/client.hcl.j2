@@ -1,5 +1,6 @@
 data_dir   = "/opt/nomad/data"
 datacenter = "homelab"
+
 client {
   enabled = true
   servers = {{ groups['nomad_servers'] | map('extract', hostvars, ['ansible_host']) | list | to_json }}
@@ -7,4 +8,9 @@ client {
     "docker.privileged.enabled" = "true"
     "driver.allowlist" = "docker"
   }
+}
+
+telemetry {
+  publish_allocation_metrics = true
+  publish_node_metrics       = true
 }

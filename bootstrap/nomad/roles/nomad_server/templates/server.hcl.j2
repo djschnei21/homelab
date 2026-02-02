@@ -1,10 +1,16 @@
-data_dir  = "/opt/nomad/data"
-bind_addr = "0.0.0.0"
+data_dir   = "/opt/nomad/data"
+bind_addr  = "0.0.0.0"
 datacenter = "homelab"
+
 server {
   enabled = true
   bootstrap_expect = 1
   default_scheduler_config {
     scheduler_algorithm = "spread"
   }
+}
+
+telemetry {
+  publish_allocation_metrics = true
+  publish_node_metrics       = true
 }
