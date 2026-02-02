@@ -426,4 +426,119 @@ EOF
       }
     }
   }
+
+  # Alby Hub - Lightning wallet, depends on Electrs
+  group "albyhub" {
+    reschedule {
+      attempts       = 15
+      interval       = "1h"
+      delay          = "30s"
+      delay_function = "exponential"
+      max_delay      = "120s"
+      unlimited      = false
+    }
+
+    volume "albyhub-data" {
+      type            = "csi"
+      read_only       = false
+      attachment_mode = "file-system"
+      access_mode     = "single-node-writer"
+      source          = "albyhub-data"
+    }
+
+    network {
+      mode = "bridge"
+      port "http" {
+        to = 8080
+      }
+    }
+
+    # Init task - wait for electrs-rpc to be available
+    task "await-electrs" {
+      lifecycle {
+        hook    = "prestart"
+        sidecar = false
+      }
+
+      driver = "docker"
+
+      config {
+        image   = "busybox:1.36"
+        command = "sh"
+        args    = ["-c", "echo 'Waiting for electrs-rpc...'; until nc -z $ELECTRS_HOST $ELECTRS_PORT; do echo 'electrs-rpc not ready, retrying...'; sleep 5; done; echo 'electrs-rpc is available'"]
+      }
+
+      template {
+        data = <<EOF
+{{ range nomadService "electrs-rpc" }}
+ELECTRS_HOST={{ .Address }}
+ELECTRS_PORT={{ .Port }}
+{{ end }}
+EOF
+        destination = "local/env"
+        env         = true
+      }
+
+      resources {
+        memory = 32
+        cpu    = 50
+      }
+    }
+
+    task "albyhub" {
+      driver = "docker"
+
+      template {
+        destination = "${NOMAD_SECRETS_DIR}/env.txt"
+        env         = true
+        data        = <<EOT
+AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/albyhub" }}{{ .AUTO_UNLOCK_PASSWORD }}{{ end }}
+DATABASE_URI=postgresql://albyhub:{{ with nomadVar "nomad/jobs/albyhub" }}{{ .DB_PASSWORD }}{{ end }}@192.168.68.50:5432/nwc?sslmode=disable
+EOT
+      }
+
+      template {
+        data = <<EOF
+{{ range nomadService "electrs-rpc" }}
+LDK_ELECTRUM_SERVER={{ .Address }}:{{ .Port }}
+{{ end }}
+EOF
+        destination = "local/electrs.env"
+        env         = true
+      }
+
+      volume_mount {
+        volume      = "albyhub-data"
+        destination = "/data"
+        read_only   = false
+      }
+
+      env {
+        WORK_DIR = "/data"
+      }
+
+      config {
+        image = "ghcr.io/getalby/hub:v1.21.4"
+        ports = ["http"]
+      }
+
+      resources {
+        cpu    = 500
+        memory = 1024
+      }
+    }
+
+    service {
+      name     = "albyhub"
+      port     = "http"
+      provider = "nomad"
+
+      check {
+        type     = "http"
+        path     = "/"
+        interval = "10s"
+        timeout  = "2s"
+      }
+    }
+  }
 }
