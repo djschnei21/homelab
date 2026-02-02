@@ -257,6 +257,13 @@ EOF
         image   = "busybox:1.36"
         command = "sh"
         args = ["-c", <<EOF
+echo 'Waiting for mariadb...'
+until nc -z 127.0.0.1 3306; do
+  echo 'mariadb not ready, retrying...'
+  sleep 2
+done
+echo 'mariadb is available'
+
 echo 'Waiting for bitcoin-rpc...'
 until nc -z $BITCOIN_HOST $BITCOIN_PORT; do
   echo 'bitcoin-rpc not ready, retrying...'
@@ -366,7 +373,7 @@ EOF
       }
 
       resources {
-        memory = 1024
+        memory = 2048
         cpu    = 1000
       }
 
