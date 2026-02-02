@@ -208,6 +208,7 @@ EOF
 
       resources {
         memory = 2048
+        cpu    = 1000
       }
 
       service {
