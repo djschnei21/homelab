@@ -1,10 +1,12 @@
+{% set bootstrap_expect = nomad_bootstrap_expect | default(groups['nomad_servers'] | length, true) %}
+
 data_dir   = "/opt/nomad/data"
 bind_addr  = "0.0.0.0"
 datacenter = "homelab"
 
 server {
   enabled = true
-  bootstrap_expect = 1
+  bootstrap_expect = {{ bootstrap_expect }}
   default_scheduler_config {
     scheduler_algorithm = "spread"
   }

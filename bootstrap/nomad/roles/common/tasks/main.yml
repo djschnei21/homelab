@@ -6,6 +6,7 @@
       - gpg
       - cgroup-tools
       - nfs-common
+      - python3-debian
     state: present
 
 - name: Add HashiCorp GPG key (if not already present)
@@ -15,11 +16,27 @@
   args:
     creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
 
+- name: Remove legacy HashiCorp apt repository list
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/hashicorp.list
+    state: absent
+
 - name: Add HashiCorp repository
-  ansible.builtin.apt_repository:
-    repo: "deb [arch=arm64 signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com bookworm main"
+  ansible.builtin.deb822_repository:
+    name: hashicorp
+    types:
+      - deb
+    uris:
+      - https://apt.releases.hashicorp.com
+    suites:
+      - bookworm
+    components:
+      - main
+    architectures:
+      - arm64
+    signed_by: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    install_python_debian: true
     state: present
-    filename: hashicorp
 
 - name: Install Nomad
   apt:

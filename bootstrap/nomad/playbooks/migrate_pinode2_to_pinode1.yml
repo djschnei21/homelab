@@ -1,0 +1,67 @@
+---
+- name: Pre-flight migration health checks
+  hosts: nomad_servers
+  become: false
+  tasks:
+    - name: Capture Nomad server membership before apply
+      ansible.builtin.command: nomad server members
+      register: pre_server_members
+      changed_when: false
+
+    - name: Capture Nomad Raft peers before apply
+      ansible.builtin.command: nomad operator raft list-peers
+      register: pre_raft_peers
+      changed_when: false
+
+    - name: Capture Nomad client status before apply
+      ansible.builtin.command: nomad node status
+      register: pre_node_status
+      changed_when: false
+
+    - name: Ensure at least one alive Nomad server exists before apply
+      ansible.builtin.assert:
+        that:
+          - "'alive' in pre_server_members.stdout"
+        fail_msg: "No alive Nomad server was found. Aborting migration apply."
+
+    - name: Display pre-flight status
+      ansible.builtin.debug:
+        msg:
+          - "Server members: {{ pre_server_members.stdout_lines }}"
+          - "Raft peers: {{ pre_raft_peers.stdout_lines }}"
+          - "Node status: {{ pre_node_status.stdout_lines }}"
+
+- name: Apply Nomad role topology from inventory
+  ansible.builtin.import_playbook: ../nomad_cluster.yml
+
+- name: Post-flight migration health checks
+  hosts: nomad_servers
+  become: false
+  tasks:
+    - name: Capture Nomad server membership after apply
+      ansible.builtin.command: nomad server members
+      register: post_server_members
+      changed_when: false
+
+    - name: Capture Nomad Raft peers after apply
+      ansible.builtin.command: nomad operator raft list-peers
+      register: post_raft_peers
+      changed_when: false
+
+    - name: Capture Nomad client status after apply
+      ansible.builtin.command: nomad node status
+      register: post_node_status
+      changed_when: false
+
+    - name: Ensure at least one alive Nomad server exists after apply
+      ansible.builtin.assert:
+        that:
+          - "'alive' in post_server_members.stdout"
+        fail_msg: "No alive Nomad server was found after migration apply."
+
+    - name: Display post-flight status
+      ansible.builtin.debug:
+        msg:
+          - "Server members: {{ post_server_members.stdout_lines }}"
+          - "Raft peers: {{ post_raft_peers.stdout_lines }}"
+          - "Node status: {{ post_node_status.stdout_lines }}"

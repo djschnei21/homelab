@@ -32,6 +32,7 @@
       - curl
       - gnupg
       - lsb-release
+      - python3-debian
     state: present
 
 - name: Add Docker GPG key
@@ -41,11 +42,27 @@
   args:
     creates: /usr/share/keyrings/docker-archive-keyring.gpg
 
+- name: Remove legacy Docker apt repository list
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
+
 - name: Add Docker repository
-  ansible.builtin.apt_repository:
-    repo: "deb [arch={{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else ansible_facts['architecture'] }} signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian {{ ansible_facts.lsb.codename }} stable"
+  ansible.builtin.deb822_repository:
+    name: docker
+    types:
+      - deb
+    uris:
+      - https://download.docker.com/linux/debian
+    suites:
+      - "{{ ansible_facts['distribution_release'] }}"
+    components:
+      - stable
+    architectures:
+      - "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else ansible_facts['architecture'] }}"
+    signed_by: /usr/share/keyrings/docker-archive-keyring.gpg
+    install_python_debian: true
     state: present
-    filename: docker
 
 - name: Install Docker
   apt:
@@ -58,6 +75,13 @@
     name: "{{ ansible_user }}"
     groups: docker
     append: yes
+
+- name: Stop package-managed node exporter if present
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    state: stopped
+    enabled: false
+  failed_when: false
 
 - name: Remove default nomad.hcl if present
   file:

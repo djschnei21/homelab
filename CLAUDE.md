@@ -10,8 +10,8 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
 
 **Cluster Topology:**
 - 4 Raspberry Pi nodes in datacenter "homelab"
-- 1 Nomad server (pinode2) with single-node bootstrap
-- 3 Nomad clients (pinode1, pinode3, pinode4) running Docker
+- 1 Nomad server (pinode1) with single-node bootstrap
+- 3 Nomad clients (pinode2, pinode3, pinode4) running Docker
 
 **Services:**
 - Bitcoin Core full node with RPC/P2P and transaction indexing
@@ -39,9 +39,9 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
 
 ## Commands
 
-Nomad server runs on pinode2. Set the address:
+Nomad server runs on pinode1. Set the address:
 ```bash
-export NOMAD_ADDR=http://pinode2.local:4646
+export NOMAD_ADDR=http://pinode1.local:4646
 ```
 
 **Deploy a Nomad job:**
