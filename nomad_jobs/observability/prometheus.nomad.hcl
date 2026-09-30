@@ -3,7 +3,7 @@ job "prometheus" {
   namespace   = "default"
 
   meta {
-    version = "2026-09-30-v11"
+    version = "2026-08-20-v2"
   }
 
   group "prometheus" {
@@ -27,7 +27,7 @@ job "prometheus" {
       driver = "docker"
 
       config {
-        image = "prom/prometheus:v2.48.0"
+        image = "prom/prometheus:v3.14.0"
 
         args = [
           "--config.file=/etc/prometheus/prometheus.yml",
@@ -136,7 +136,7 @@ EOF
       driver = "docker"
 
       config {
-        image = "grafana/grafana:10.2.0"
+        image = "grafana/grafana:13.2.0"
         ports = ["http"]
 
         volumes = [
@@ -186,7 +186,7 @@ EOF
 
       resources {
         cpu    = 300
-        memory = 256
+        memory = 512
       }
     }
 
