@@ -39,7 +39,7 @@ job "bitcoin-stack" {
       driver = "docker"
 
       config {
-        image = "bitcoin/bitcoin:30.2"
+        image = "bitcoin/bitcoin:31.1"
 
         entrypoint = ["bitcoind"]
 
@@ -180,7 +180,7 @@ EOF
       }
 
       config {
-        image = "getumbrel/electrs:v0.10.10"
+        image = "getumbrel/electrs:v0.11.1"
         args = [
           "--log-filters", "INFO",
           "--db-dir", "/data/electrs",
@@ -518,7 +518,7 @@ EOF
       }
 
       config {
-        image = "ghcr.io/getalby/hub:v1.21.4"
+        image = "ghcr.io/getalby/hub:v1.24.0"
         ports = ["http"]
       }
 
