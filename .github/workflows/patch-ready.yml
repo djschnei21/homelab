@@ -54,11 +54,24 @@ jobs:
             sleep 50
             exit 0
           fi
-          nomad node status -no-color | while IFS= read -r line; do
+          # Clients rejoin for a while after the server boots. A header with no
+          # node rows is not a healthy cluster; pinode2-4 must be listed and ready.
+          status_out="$(mktemp)"
+          ready=0
+          for _ in $(seq 1 18); do
+            if nomad node status -no-color >"$status_out" 2>&1 \
+              && awk 'NR>1 && NF { n++; if ($NF != "ready") bad = 1 } END { exit !(n >= 3 && !bad) }' "$status_out"; then
+              ready=1
+              break
+            fi
+            sleep 10
+          done
+          while IFS= read -r line; do
             [[ -z "$line" ]] && continue
             echo "::notice::${line}"
-          done
-          if nomad node status -no-color | awk 'NR>1 && $NF != "ready" { bad = 1 } END { exit bad+0 }'; then
+          done <"$status_out"
+          rm -f "$status_out"
+          if [[ "$ready" -eq 1 ]]; then
             echo "::notice::all nomad nodes ready after patch"
           else
             echo "::error::a nomad node is not ready after patch"

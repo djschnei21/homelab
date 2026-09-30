@@ -333,6 +333,8 @@ check "post-reboot check stays on the homelab runner" bash -c "! grep -q 'ubuntu
 check "post-reboot check requeues while reboot is scheduled" grep -q 'requeued Nomad recheck attempt' "$READY"
 check "post-reboot check uses nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$READY"
 check "post-reboot check shares the cluster lock" grep -q 'group: homelab-cluster' "$READY"
+check "post-reboot check waits for three clients" grep -q 'n >= 3' "$READY"
+check "patch workflow requires three ready clients" grep -q 'n >= 3' "$PATCH"
 
 if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
   echo "FAIL script references a forbidden command" >&2

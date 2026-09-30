@@ -84,7 +84,8 @@ jobs:
             [[ -z "$line" ]] && continue
             echo "::notice::${line}"
           done
-          if nomad node status -no-color | awk 'NR>1 && $NF != "ready" { bad = 1 } END { exit bad+0 }'; then
+          # Three clients. A header-only reply is not a healthy cluster.
+          if nomad node status -no-color | awk 'NR>1 && NF { n++; if ($NF != "ready") bad = 1 } END { exit !(n >= 3 && !bad) }'; then
             echo "::notice::all nomad nodes ready"
           else
             echo "::error::a nomad node is not ready after patch"
