@@ -318,7 +318,7 @@ check "patch workflow shares the cluster lock" grep -q 'group: homelab-cluster' 
 check "patch workflow can be dispatched" grep -q 'workflow_dispatch' "$PATCH"
 check "patch workflow is scheduled" grep -q 'cron:' "$PATCH"
 check "patch workflow runs the patch playbook" grep -q 'playbooks/patch_cluster.yml' "$PATCH"
-check "patch ssh does not require stored host keys" grep -q 'StrictHostKeyChecking=no' "$PATCH"
+check "patch ssh keeps host key checking" bash -c "! grep -q 'StrictHostKeyChecking=no' '$PATCH' && ! grep -q 'UserKnownHostsFile=/dev/null' '$PATCH' && ! grep -q 'ANSIBLE_HOST_KEY_CHECKING' '$PATCH'"
 check "patch workflow does not run on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$PATCH'"
 check "patch workflow reports node status" grep -q 'nomad node status -no-color' "$PATCH"
 check "patch workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$PATCH"
