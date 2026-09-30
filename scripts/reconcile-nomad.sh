@@ -21,6 +21,7 @@ fi
 # Keep the message on one line so the workflow command survives the log pipe.
 ci_error() {
   local msg="$1" escaped
+  msg="${msg:0:400}"
   printf '%s\n' "$msg" >&2
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     printf '%s\n' "$msg" >>"${GITHUB_STEP_SUMMARY}"
@@ -29,6 +30,19 @@ ci_error() {
     escaped="${msg//%/%25}"
     escaped="${escaped//$'\n'/%0A}"
     printf '::error::%s\n' "$escaped"
+  fi
+}
+
+gh_notice() {
+  local msg="$1" escaped
+  msg="${msg:0:400}"
+  printf '%s\n' "$msg"
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    printf '%s\n' "$msg" >>"${GITHUB_STEP_SUMMARY}"
+  fi
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    escaped="${msg//%/%25}"
+    printf '::notice::%s\n' "$escaped"
   fi
 }
 
@@ -172,6 +186,8 @@ plan_is_downgrade() {
   local plan_file="$1" line
   while IFS= read -r line || [[ -n "$line" ]]; do
     if resource_line_is_downgrade "$line" || image_line_is_downgrade "$line"; then
+      line="${line#"${line%%[![:space:]]*}"}"
+      printf '%s\n' "$line"
       return 0
     fi
   done <"$plan_file"
@@ -213,8 +229,9 @@ plan_decision() {
   fi
 
   # A downgrade is refused: the cluster must not move backward even when main says so.
-  if plan_is_downgrade "$plan_file"; then
-    printf 'refuse\n'
+  local reason=""
+  if reason="$(plan_is_downgrade "$plan_file")"; then
+    printf 'refuse %s\n' "$reason"
     return 0
   fi
 
@@ -283,7 +300,7 @@ print_failure_diagnostics() {
 
 # Returns 0 on success, 1 on plan error, 10 on deployment failure.
 reconcile_one() {
-  local file="$1" ns plan_file plan_rc decision index run_rc
+  local file="$1" ns plan_file plan_rc decision index run_rc plan_err=""
   echo "==> ${file}"
 
   if ! ns="$(namespace_for "$file")"; then
@@ -301,6 +318,7 @@ reconcile_one() {
   echo "plan exit ${plan_rc}"
   redact <"$plan_file"
 
+  plan_err="$(grep -m1 -E 'Error|error|failed' "$plan_file" || true)"
   decision="$(plan_decision "$plan_rc" "$plan_file")"
   rm -f "$plan_file"
 
@@ -312,13 +330,13 @@ reconcile_one() {
     apply\ *)
       index="${decision#apply }"
       ;;
-    refuse)
-      echo "refused downgrade: ${file}"
-      ci_error "refused downgrade: ${file}"
+    refuse*)
+      echo "refused downgrade: ${file}: ${decision#refuse }"
+      ci_error "refused downgrade: ${file}: ${decision#refuse }"
       return 1
       ;;
     error\ *)
-      ci_error "plan error: ${file}: ${decision#error }"
+      ci_error "plan error: ${file}: ${decision#error } ${plan_err}"
       return 1
       ;;
     *)
@@ -328,15 +346,18 @@ reconcile_one() {
   esac
 
   echo "submitting ${file} -check-index ${index}"
+  local run_out
+  run_out="$(mktemp)"
   set +e
   set +o pipefail
-  nomad job run -check-index "$index" -namespace="$ns" -no-color "$file" 2>&1 | redact
+  nomad job run -check-index "$index" -namespace="$ns" -no-color "$file" 2>&1 | redact | tee "$run_out"
   run_rc="${PIPESTATUS[0]}"
   set -o pipefail
   set -e
 
   if [[ "$run_rc" -ne 0 ]]; then
-    ci_error "deployment failed: ${file} (nomad job run exit ${run_rc})"
+    ci_error "deployment failed: ${file} (nomad job run exit ${run_rc}) $(tail -n 1 "$run_out")"
+    rm -f "$run_out"
     local job
     if job="$(job_name_from_file "$file")"; then
       print_failure_diagnostics "$ns" "$job" || true
@@ -344,8 +365,54 @@ reconcile_one() {
     return 10
   fi
 
+  rm -f "$run_out"
   echo "deployment succeeded: ${file}"
   return 0
+}
+
+# Registered tasks are emitted as checks notices. Actions log blobs are not
+# readable from outside the LAN, and the next reconcile has to show what the
+# cluster is actually running.
+note_cluster_status() {
+  local file ns name out rc line
+  out="$(mktemp)"
+  set +e
+  nomad node status -no-color >"$out" 2>&1
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    ci_error "nomad node status failed: $(head -n 1 "$out")"
+  else
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$line" ]] && continue
+      gh_notice "node ${line}"
+    done <"$out"
+  fi
+  rm -f "$out"
+
+  for file in "$@"; do
+    if ! ns="$(namespace_for "$file")"; then
+      continue
+    fi
+    if ! name="$(job_name_from_file "$file")"; then
+      continue
+    fi
+    out="$(mktemp)"
+    set +e
+    nomad job inspect -namespace="$ns" -t '{{range .TaskGroups}}{{range .Tasks}}{{$.ID}}/{{.Name}} image={{index .Config "image"}} cpu={{if .Resources}}{{.Resources.CPU}}{{end}} memory={{if .Resources}}{{.Resources.MemoryMB}}{{end}}{{println}}{{end}}{{end}}' "$name" >"$out" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -ne 0 ]]; then
+      gh_notice "job inspect failed: ${file}: $(head -n 1 "$out")"
+      rm -f "$out"
+      continue
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$line" ]] && continue
+      gh_notice "registered ${line}"
+    done <"$out"
+    rm -f "$out"
+  done
 }
 
 main() {
@@ -365,6 +432,10 @@ main() {
   if [[ "${#files[@]}" -eq 0 ]]; then
     ci_error "no job files under nomad_jobs/"
     exit 1
+  fi
+
+  if [[ -n "${RECONCILE_STATUS:-}" ]]; then
+    note_cluster_status "${files[@]}"
   fi
 
   for file in "${files[@]}"; do
