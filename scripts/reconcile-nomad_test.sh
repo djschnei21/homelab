@@ -318,7 +318,7 @@ check "patch workflow shares the cluster lock" grep -q 'group: homelab-cluster' 
 check "patch workflow can be dispatched" grep -q 'workflow_dispatch' "$PATCH"
 check "patch workflow is scheduled" grep -q 'cron:' "$PATCH"
 check "patch workflow runs the patch playbook" grep -q 'playbooks/patch_cluster.yml' "$PATCH"
-check "patch workflow limits push to paths" grep -q 'paths:' "$PATCH"
+check "patch workflow does not run on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$PATCH'"
 
 if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
   echo "FAIL script references a forbidden command" >&2

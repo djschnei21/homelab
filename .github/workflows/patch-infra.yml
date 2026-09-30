@@ -2,18 +2,12 @@ name: Patch cluster hosts
 
 # Self-hosted because GitHub-hosted runners cannot reach the Pis.
 # Job specs deploy through reconcile.yml. This play dist-upgrades and reboots,
-# so it does not run on every push.
+# so it does not run on push. Merge does not start it.
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "17 8 * * 1"
-  push:
-    branches:
-      - main
-    paths:
-      - "bootstrap/**"
-      - ".github/workflows/patch-infra.yml"
 
 permissions:
   contents: read
