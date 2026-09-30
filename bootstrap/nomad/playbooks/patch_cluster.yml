@@ -22,6 +22,9 @@
   hosts: nomad_clients
   serial: 1
   become: true
+  # A failed host must stop the server play. Rebooting the server on top of a
+  # half-patched client is how the cluster ends up neither updated nor running.
+  any_errors_fatal: true
   tasks:
     - name: Get node ID
       command: nomad node status -self -json
@@ -37,83 +40,95 @@
       debug:
         msg: "Patching node {{ node_name }} ({{ node_id }})"
 
-    - name: Enable drain with deadline
-      command: nomad node drain -enable -deadline 15m -yes -self
-      register: drain_result
-
-    - name: Wait for drain to complete
-      command: nomad node status -self -json
-      register: drain_status
-      until: >
-        (drain_status.stdout | from_json).SchedulingEligibility == 'ineligible' and
-        ((drain_status.stdout | from_json).DrainStrategy == None or
-         (drain_status.stdout | from_json).LastDrain.Status == 'complete')
-      retries: 90
-      delay: 10
-      changed_when: false
-
-    - name: Update package cache and upgrade packages
-      apt:
-        update_cache: yes
-        upgrade: dist
-      register: apt_result
-
-    - name: Check if reboot is required
-      stat:
-        path: /var/run/reboot-required
-      register: reboot_required
-
-    - name: Reboot if required
-      reboot:
-        reboot_timeout: 600
-        connect_timeout: 300
-        test_command: uptime
-      when: reboot_required.stat.exists or apt_result.changed
-
-    - name: Wait for Nomad agent to be ready
-      command: nomad node status -self -json
-      register: nomad_status
-      until: nomad_status.rc == 0
-      retries: 30
-      delay: 10
-      changed_when: false
-
-    - name: Disable drain (make node eligible)
-      command: nomad node drain -disable -yes -self
-
-    - name: Wait for node to be eligible
-      command: nomad node status -self -json
-      register: eligibility_status
-      until: (eligibility_status.stdout | from_json).SchedulingEligibility == 'eligible'
-      retries: 30
-      delay: 5
-      changed_when: false
-
-    - name: Wait for allocations to be placed
+    # A failure after drain used to leave the client ineligible. Put it back
+    # into service, then fail the host so the roll stops.
+    - name: Patch one client and return it to service
       block:
-        - name: Give scheduler time to place allocations
-          pause:
-            seconds: 30
+        - name: Enable drain with deadline
+          command: nomad node drain -enable -deadline 15m -yes -self
+          register: drain_result
 
-        - name: Get node allocation status
+        - name: Wait for drain to complete
           command: nomad node status -self -json
-          register: node_alloc_status
+          register: drain_status
+          until: >
+            (drain_status.stdout | from_json).SchedulingEligibility == 'ineligible' and
+            ((drain_status.stdout | from_json).DrainStrategy == None or
+             (drain_status.stdout | from_json).LastDrain.Status == 'complete')
+          retries: 90
+          delay: 10
           changed_when: false
 
-        - name: Display allocation count
-          debug:
-            msg: "Node {{ node_name }} has {{ (node_alloc_status.stdout | from_json).Allocations | default([]) | length }} allocations"
+        - name: Update package cache and upgrade packages
+          apt:
+            update_cache: yes
+            upgrade: dist
+          register: apt_result
 
-    # The Actions log blob is not readable off the LAN. One line per host is
-    # what the workflow can turn into a check notice.
-    - name: Record host patch result for the CI notice
-      delegate_to: localhost
-      connection: local
-      become: false
-      changed_when: false
-      ansible.builtin.copy:
-        dest: "/tmp/homelab-patch-results/{{ inventory_hostname }}.txt"
-        content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled=false\n"
+        - name: Check if reboot is required
+          stat:
+            path: /var/run/reboot-required
+          register: reboot_required
+
+        - name: Reboot if required
+          reboot:
+            reboot_timeout: 600
+            connect_timeout: 300
+            test_command: uptime
+          when: reboot_required.stat.exists or apt_result.changed
+
+        - name: Wait for Nomad agent to be ready
+          command: nomad node status -self -json
+          register: nomad_status
+          until: nomad_status.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Disable drain (make node eligible)
+          command: nomad node drain -disable -yes -self
+
+        - name: Wait for node to be eligible
+          command: nomad node status -self -json
+          register: eligibility_status
+          until: (eligibility_status.stdout | from_json).SchedulingEligibility == 'eligible'
+          retries: 30
+          delay: 5
+          changed_when: false
+
+        - name: Wait for allocations to be placed
+          block:
+            - name: Give scheduler time to place allocations
+              pause:
+                seconds: 30
+
+            - name: Get node allocation status
+              command: nomad node status -self -json
+              register: node_alloc_status
+              changed_when: false
+
+            - name: Display allocation count
+              debug:
+                msg: "Node {{ node_name }} has {{ (node_alloc_status.stdout | from_json).Allocations | default([]) | length }} allocations"
+
+        # The Actions log blob is not readable off the LAN. One line per host is
+        # what the workflow can turn into a check notice.
+        - name: Record host patch result for the CI notice
+          delegate_to: localhost
+          connection: local
+          become: false
+          changed_when: false
+          ansible.builtin.copy:
+            dest: "/tmp/homelab-patch-results/{{ inventory_hostname }}.txt"
+            content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled=false\n"
+      rescue:
+        - name: Disable drain after a failed patch
+          command: nomad node drain -disable -yes -self
+          failed_when: false
+
+        - name: Stop the roll after the client is eligible again
+          fail:
+            msg: "client patch failed; drain disabled so the node can take work again"
 
 - name: Patch Nomad Server
   hosts: nomad_servers
