@@ -17,6 +17,21 @@ if [[ -n "${RECONCILE_ROOT:-}" ]]; then
   ROOT="$RECONCILE_ROOT"
 fi
 
+# Checks annotations are readable here; the Actions log blob host is not.
+# Keep the message on one line so the workflow command survives the log pipe.
+ci_error() {
+  local msg="$1" escaped
+  printf '%s\n' "$msg" >&2
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    printf '%s\n' "$msg" >>"${GITHUB_STEP_SUMMARY}"
+  fi
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    escaped="${msg//%/%25}"
+    escaped="${escaped//$'\n'/%0A}"
+    printf '::error::%s\n' "$escaped"
+  fi
+}
+
 # Whole line, not a substring: plan diffs and task logs can carry rpc auth.
 redact() {
   local line lower
@@ -272,6 +287,7 @@ reconcile_one() {
   echo "==> ${file}"
 
   if ! ns="$(namespace_for "$file")"; then
+    ci_error "no namespace for ${file}"
     return 1
   fi
   echo "namespace ${ns}"
@@ -298,14 +314,15 @@ reconcile_one() {
       ;;
     refuse)
       echo "refused downgrade: ${file}"
+      ci_error "refused downgrade: ${file}"
       return 1
       ;;
     error\ *)
-      echo "plan error: ${decision#error }" >&2
+      ci_error "plan error: ${file}: ${decision#error }"
       return 1
       ;;
     *)
-      echo "unparsed plan decision: ${decision}" >&2
+      ci_error "unparsed plan decision: ${file}: ${decision}"
       return 1
       ;;
   esac
@@ -319,7 +336,7 @@ reconcile_one() {
   set -e
 
   if [[ "$run_rc" -ne 0 ]]; then
-    echo "deployment failed: ${file} (nomad job run exit ${run_rc})" >&2
+    ci_error "deployment failed: ${file} (nomad job run exit ${run_rc})"
     local job
     if job="$(job_name_from_file "$file")"; then
       print_failure_diagnostics "$ns" "$job" || true
@@ -339,14 +356,14 @@ main() {
   cd "$root"
 
   if [[ -z "${NOMAD_ADDR:-}" ]]; then
-    echo "NOMAD_ADDR is not set" >&2
+    ci_error "NOMAD_ADDR is not set"
     exit 1
   fi
 
   local files=()
   mapfile -t files < <(find nomad_jobs -type f -name '*.nomad.hcl' | sort)
   if [[ "${#files[@]}" -eq 0 ]]; then
-    echo "no job files under nomad_jobs/" >&2
+    ci_error "no job files under nomad_jobs/"
     exit 1
   fi
 
@@ -359,6 +376,7 @@ main() {
       continue
     fi
     if [[ "$rc" -eq 10 ]]; then
+      ci_error "stopped after deployment failure: ${file}"
       exit 1
     fi
     failed=1

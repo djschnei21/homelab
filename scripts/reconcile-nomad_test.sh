@@ -241,12 +241,13 @@ write_job "nomad_jobs/plugins/a-downgrade.nomad.hcl" 'job "downgrade" { group "g
 write_job "nomad_jobs/plugins/z-okup.nomad.hcl" 'job "okup" { group "g" {} }'
 LOG="$TMP/downgrade.log"
 set +e
-( main >"$LOG" 2>&1 )
+( GITHUB_ACTIONS=1 main >"$LOG" 2>&1 )
 main_rc=$?
 set -e
 check "downgrade refuses the run" assert_eq "$main_rc" "1"
 check "downgrade plan was printed" grep -q 'MemoryMB: "4096" => "2048"' "$LOG"
 check "downgrade job recorded as refused" grep -q "refused downgrade: nomad_jobs/plugins/a-downgrade.nomad.hcl" "$LOG"
+check "downgrade is a checks annotation" grep -q "::error::refused downgrade: nomad_jobs/plugins/a-downgrade.nomad.hcl" "$LOG"
 check "downgrade plan secret redacted" assert_file_lacks "$LOG" "downgrade-secret"
 check "downgrade was not submitted" bash -c "! grep -q 'job run .*downgrade.nomad.hcl' '$CALLS'"
 check "non-downgrade still submitted after refusal" grep -q "job run -check-index 30 -namespace=default -no-color nomad_jobs/plugins/z-okup.nomad.hcl" "$CALLS"
@@ -280,6 +281,17 @@ check "workflow is self-hosted" grep -q 'self-hosted, homelab' "$WF"
 check "workflow does not cancel in progress" grep -q 'cancel-in-progress: false' "$WF"
 check "workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$WF"
 check "workflow comment tracks deployment" grep -q 'until the deployment succeeds' "$WF"
+check "workflow shares the cluster lock" grep -q 'group: homelab-cluster' "$WF"
+
+PATCH="$ROOT/.github/workflows/patch-infra.yml"
+check "patch workflow has no pull_request" bash -c "! grep -q pull_request '$PATCH'"
+check "patch workflow is self-hosted" grep -q 'self-hosted, homelab' "$PATCH"
+check "patch workflow does not cancel in progress" grep -q 'cancel-in-progress: false' "$PATCH"
+check "patch workflow shares the cluster lock" grep -q 'group: homelab-cluster' "$PATCH"
+check "patch workflow can be dispatched" grep -q 'workflow_dispatch' "$PATCH"
+check "patch workflow is scheduled" grep -q 'cron:' "$PATCH"
+check "patch workflow runs the patch playbook" grep -q 'playbooks/patch_cluster.yml' "$PATCH"
+check "patch workflow limits push to paths" grep -q 'paths:' "$PATCH"
 
 if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
   echo "FAIL script references a forbidden command" >&2

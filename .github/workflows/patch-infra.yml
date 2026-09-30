@@ -1,0 +1,57 @@
+name: Patch cluster hosts
+
+# Self-hosted because GitHub-hosted runners cannot reach the Pis.
+# Job specs deploy through reconcile.yml. This play dist-upgrades and reboots,
+# so it does not run on every push.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * 1"
+  push:
+    branches:
+      - main
+    paths:
+      - "bootstrap/**"
+      - ".github/workflows/patch-infra.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homelab-cluster
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: [self-hosted, homelab]
+    env:
+      # The runner has no stored host keys for the Pis.
+      ANSIBLE_HOST_KEY_CHECKING: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch Nomad hosts
+        run: |
+          set -euo pipefail
+          runner="$(hostname -s)"
+          echo "::notice::infra patch runner ${runner} user $(id -un)"
+          case "$runner" in
+            pinode2|pinode3|pinode4)
+              echo "::error::infra patch runner is ${runner}, a Nomad client; draining it would kill this job"
+              exit 1
+              ;;
+          esac
+          if ! command -v ansible-playbook >/dev/null 2>&1; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ansible
+          fi
+          for host in pinode1 pinode2 pinode3 pinode4; do
+            if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "dan@${host}.local" true; then
+              echo "::error::ssh to dan@${host}.local failed"
+              exit 1
+            fi
+          done
+          cd bootstrap/nomad
+          ansible-playbook -i ../inventory.yml -e "patch_runner_host=${runner}" playbooks/patch_cluster.yml

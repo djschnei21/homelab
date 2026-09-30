@@ -123,12 +123,22 @@
         path: /var/run/reboot-required
       register: reboot_required
 
+    # An in-band reboot of the Actions runner kills the job before GitHub
+    # records the result, so that host reboots a minute after the play exits.
     - name: Reboot if required
       reboot:
         reboot_timeout: 600
         connect_timeout: 300
         test_command: uptime
-      when: reboot_required.stat.exists or apt_result.changed
+      when:
+        - reboot_required.stat.exists or apt_result.changed
+        - inventory_hostname != (patch_runner_host | default(''))
+
+    - name: Schedule reboot of the CI runner host
+      command: shutdown -r +1 "homelab infra patch"
+      when:
+        - reboot_required.stat.exists or apt_result.changed
+        - inventory_hostname == (patch_runner_host | default(''))
 
     - name: Wait for Nomad server to be ready
       command: nomad server members

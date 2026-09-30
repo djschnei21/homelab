@@ -14,7 +14,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: nomad-reconcile
+  # Shared with patch-infra.yml so a host reboot cannot overlap a job run.
+  group: homelab-cluster
   cancel-in-progress: false
 
 env:
