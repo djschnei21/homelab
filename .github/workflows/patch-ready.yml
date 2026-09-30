@@ -42,7 +42,7 @@ jobs:
             fi
             next="$((attempt + 1))"
             echo "::notice::runner reboot is still scheduled; requeued Nomad recheck attempt ${next}"
-            code="$(curl -sS -o /tmp/homelab-dispatch-body -w '%{http_code}' -X POST \
+            code="$(curl -sS --max-time 30 -o /tmp/homelab-dispatch-body -w '%{http_code}' -X POST \
               -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/patch-ready.yml/dispatches" \
@@ -59,7 +59,7 @@ jobs:
           status_out="$(mktemp)"
           ready=0
           for _ in $(seq 1 18); do
-            if nomad node status -no-color >"$status_out" 2>&1 \
+            if timeout 15 nomad node status -no-color >"$status_out" 2>&1 \
               && awk 'NR>1 && NF { n++; if ($NF != "ready") bad = 1 } END { exit !(n >= 3 && !bad) }' "$status_out"; then
               ready=1
               break

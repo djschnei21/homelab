@@ -344,6 +344,21 @@ check "post-reboot check uses nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68
 check "post-reboot check shares the cluster lock" grep -q 'group: homelab-cluster' "$READY"
 check "post-reboot check waits for three clients" grep -q 'n >= 3' "$READY"
 check "patch workflow requires three ready clients" grep -q 'n >= 3' "$PATCH"
+check "patch workflow defers the runner reboot" grep -q 'patch_defer_runner_reboot=true' "$PATCH"
+check "patch workflow reboots the runner after the readiness check" awk '
+  /a nomad node is not ready after patch/ { failed = 1 }
+  /workflows\/patch-ready.yml\/dispatches/ { if (!failed) exit 1; dispatched = 1 }
+  /shutdown -r \+1/ { if (!dispatched) exit 1; found = 1 }
+  END { exit !(failed && dispatched && found) }
+' "$PATCH"
+check "patch workflow bounds the nomad status call" grep -q 'timeout 15 nomad node status -no-color' "$PATCH"
+check "post-reboot check bounds the nomad status call" grep -q 'timeout 15 nomad node status -no-color' "$READY"
+check "manual runner reboot waits until nomad answers" awk '
+  /Wait for Nomad server to be ready/ { waited = 1 }
+  /shutdown -r \+2/ { if (!waited) exit 1; found = 1 }
+  END { exit !(waited && found) }
+' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "playbook can leave the runner reboot to CI" grep -q 'patch_defer_runner_reboot' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 
 if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
   echo "FAIL script references a forbidden command" >&2

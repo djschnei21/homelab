@@ -155,8 +155,7 @@
       register: reboot_required
 
     # The runner service name is not the inventory hostname. An in-band reboot
-    # of the machine running the job kills it before GitHub records the result,
-    # so that host reboots a minute after the play exits.
+    # of the machine running the job kills it before GitHub records the result.
     - name: Decide whether this host is the Actions runner
       set_fact:
         host_is_runner: >-
@@ -176,13 +175,6 @@
         - reboot_required.stat.exists or apt_result.changed
         - not host_is_runner
 
-    - name: Schedule reboot of the CI runner host
-      command: shutdown -r +1 "homelab infra patch"
-      when:
-        - reboot_required.stat.exists or apt_result.changed
-        - host_is_runner
-      register: scheduled_reboot
-
     - name: Wait for Nomad server to be ready
       command: nomad server members
       register: server_status
@@ -200,6 +192,21 @@
       debug:
         msg: "{{ final_node_status.stdout_lines }}"
 
+    # CI sets patch_defer_runner_reboot so this job can queue the post-boot
+    # check and exit before the machine goes down. A manual run schedules the
+    # reboot here, only after Nomad has answered.
+    - name: Schedule reboot of the CI runner host
+      command: shutdown -r +2 "homelab infra patch"
+      when:
+        - reboot_required.stat.exists or apt_result.changed
+        - host_is_runner
+        - not (patch_defer_runner_reboot | default(false) | bool)
+      register: scheduled_reboot
+
+    - name: Note a reboot the CI job still has to schedule
+      set_fact:
+        runner_reboot_deferred: "{{ (reboot_required.stat.exists or apt_result.changed) and (host_is_runner | bool) and (patch_defer_runner_reboot | default(false) | bool) }}"
+
     - name: Record host patch result for the CI notice
       delegate_to: localhost
       connection: local
@@ -207,4 +214,4 @@
       changed_when: false
       ansible.builtin.copy:
         dest: "/tmp/homelab-patch-results/{{ inventory_hostname }}.txt"
-        content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled={{ scheduled_reboot is changed }}\n"
+        content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled={{ (scheduled_reboot is changed) or (runner_reboot_deferred | bool) }}\n"

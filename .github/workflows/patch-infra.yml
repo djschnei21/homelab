@@ -64,6 +64,7 @@ jobs:
           ansible-playbook -i ../inventory.yml \
             -e "patch_runner_host=${runner}" \
             -e "{\"patch_runner_ips\":\"${runner_ips}\"}" \
+            -e patch_defer_runner_reboot=true \
             playbooks/patch_cluster.yml
           # One line per host. The Actions log store is not readable from outside the LAN.
           for host in pinode1 pinode2 pinode3 pinode4; do
@@ -75,12 +76,32 @@ jobs:
             line="$(tr -d '\n' <"$result")"
             echo "::notice::${line}"
           done
-          # The same job cannot see the runner host come back: that reboot is a
-          # minute after this step exits. Queue the check while this job still
-          # holds the runner, so it waits until after boot.
+          # The Actions log store is not readable from outside the LAN.
+          # A hung agent must fail this step, not run until the reboot kills it.
+          # Three clients. A header-only reply is not a healthy cluster.
+          # Reboot the runner only after this passes and the follow-up is queued,
+          # so a down client does not lose the server on top of the failed roll.
+          status_out="$(mktemp)"
+          if timeout 15 nomad node status -no-color >"$status_out" 2>&1 \
+            && awk 'NR>1 && NF { n++; if ($NF != "ready") bad = 1 } END { exit !(n >= 3 && !bad) }' "$status_out"; then
+            nodes_ready=1
+          else
+            nodes_ready=0
+          fi
+          while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            echo "::notice::${line}"
+          done <"$status_out"
+          rm -f "$status_out"
+          if [[ "$nodes_ready" -eq 1 ]]; then
+            echo "::notice::all nomad nodes ready"
+          else
+            echo "::error::a nomad node is not ready after patch"
+            exit 1
+          fi
           if grep -q 'reboot_scheduled=True' /tmp/homelab-patch-results/*.txt; then
             echo "::notice::runner host reboot is scheduled; Nomad is checked again after boot"
-            code="$(curl -sS -o /tmp/homelab-dispatch-body -w '%{http_code}' -X POST \
+            code="$(curl -sS --max-time 30 -o /tmp/homelab-dispatch-body -w '%{http_code}' -X POST \
               -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/patch-ready.yml/dispatches" \
@@ -89,16 +110,6 @@ jobs:
               echo "::error::recheck dispatch failed with HTTP ${code}"
               exit 1
             fi
-          fi
-          # The Actions log store is not readable from outside the LAN.
-          nomad node status -no-color | while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            echo "::notice::${line}"
-          done
-          # Three clients. A header-only reply is not a healthy cluster.
-          if nomad node status -no-color | awk 'NR>1 && NF { n++; if ($NF != "ready") bad = 1 } END { exit !(n >= 3 && !bad) }'; then
-            echo "::notice::all nomad nodes ready"
-          else
-            echo "::error::a nomad node is not ready after patch"
-            exit 1
+            echo "::notice::runner host reboots in one minute"
+            sudo shutdown -r +1 "homelab infra patch"
           fi
