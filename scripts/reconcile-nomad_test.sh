@@ -212,8 +212,10 @@ check "image upgrade still applies" assert_eq "$(plan_of 0 $'+/- image: "ghcr.io
 check "leading v equal to pin still applies" assert_eq "$(plan_of 0 $'+/- image: "app:v1.2.0" => "app:1.2.0"\n\nJob Modify Index: 5')" "apply 5"
 check "suffix rollback is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:1.24.0-alpine" => "app:1.21.4-alpine"\n\nJob Modify Index: 5')" 'image: "app:1.24.0-alpine" => "app:1.21.4-alpine"'
 check "suffix upgrade still applies" assert_eq "$(plan_of 0 $'+/- image: "app:1.21.4-alpine" => "app:1.24.0-alpine"\n\nJob Modify Index: 5')" "apply 5"
+check "higher core may change suffix" assert_eq "$(plan_of 0 $'+/- image: "app:1.21.4-alpine" => "app:1.24.0-debian"\n\nJob Modify Index: 5')" "apply 5"
 check "equal tag still applies" assert_eq "$(plan_of 0 $'+/- image: "app:1.24.0-alpine" => "app:1.24.0-alpine"\n\nJob Modify Index: 5')" "apply 5"
-check "equal numeric core with different suffix still applies" assert_eq "$(plan_of 0 $'+/- image: "app:1.24.0-alpine" => "app:1.24.0"\n\nJob Modify Index: 5')" "apply 5"
+check "equal core suffix change is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:1.24.0-alpine3.20" => "app:1.24.0-alpine3.19"\n\nJob Modify Index: 5')" 'image: "app:1.24.0-alpine3.20" => "app:1.24.0-alpine3.19"'
+check "equal core build metadata change is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:1.24.0+build.5" => "app:1.24.0+build.9"\n\nJob Modify Index: 5')" 'image: "app:1.24.0+build.5" => "app:1.24.0+build.9"'
 check "latest to pin is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:latest" => "app:1.2.3"\n\nJob Modify Index: 5')" 'image: "app:latest" => "app:1.2.3"'
 check "pin to latest is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:1.2.3" => "app:latest"\n\nJob Modify Index: 5')" 'image: "app:1.2.3" => "app:latest"'
 check "unparseable tag change is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:stable" => "app:edge"\n\nJob Modify Index: 5')" 'image: "app:stable" => "app:edge"'

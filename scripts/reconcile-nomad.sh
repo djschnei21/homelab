@@ -7,11 +7,12 @@
 #   255 error determining plan results
 # Exit 0 with an empty diff is a pass. A diff that lowers memory or CPU is not
 # submitted. An image change is not submitted when the numeric core decreases,
-# or when the tags differ and the new tag is not a proven equal or higher
-# version (`latest`, a suffix rollback, or any tag that does not parse). Equal
-# numeric cores are not a downgrade. Any other real diff is submitted with
-# `nomad job run -check-index` and no -detach, so Nomad tracks the deployment.
-# Refused jobs still fail the run after every other job is handled.
+# when an equal core changes suffix or build metadata, or when the tags differ
+# and the new tag is not a higher version (`latest`, or any tag that does not
+# parse). Identical tags, and a lone leading v on an otherwise identical tag,
+# are not downgrades. A higher core may change suffix. Any other real diff is
+# submitted with `nomad job run -check-index` and no -detach, so Nomad tracks
+# the deployment. Refused jobs still fail the run after every other job is handled.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -125,8 +126,7 @@ image_tag() {
 }
 
 # Dotted numeric core, or empty when the tag is not a version. One leading v
-# is optional. Suffix and build metadata (-alpine, +build) are not part of
-# the core: 1.24.0-rc.1 and 1.24.0 order as the same version.
+# is optional and is not part of the core.
 version_core() {
   local tag="$1"
   if [[ "$tag" == v* ]]; then
@@ -134,6 +134,18 @@ version_core() {
   fi
   if [[ "$tag" =~ ^([0-9]+(\.[0-9]+)*)([-+].+)?$ ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"
+  fi
+}
+
+# Suffix or build metadata, including the leading - or +. Empty when the tag
+# has none. Group 2 is the last dotted component, so the metadata is group 3.
+version_suffix() {
+  local tag="$1"
+  if [[ "$tag" == v* ]]; then
+    tag="${tag#v}"
+  fi
+  if [[ "$tag" =~ ^([0-9]+(\.[0-9]+)*)([-+].+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[3]}"
   fi
 }
 
@@ -175,11 +187,14 @@ resource_line_is_downgrade() {
   return 1
 }
 
-# Fail closed. A lower numeric core is a downgrade. Any other tag change that
-# is not a proven equal or higher version — latest, or a tag that does not
-# parse — is refused too. Identical tags are not a change.
+# Identical tags are not a change. A higher numeric core is an upgrade even
+# when the suffix changes. An equal core is refused when suffix or build
+# metadata differs. The same remaining tag with one leading v is not a
+# downgrade. latest, or any tag that does not parse, is refused when the
+# strings differ.
 image_line_is_downgrade() {
   local line="$1" old_ref new_ref old_tag new_tag old_core new_core
+  local old_bare new_bare old_suffix new_suffix
   if [[ "$line" =~ (^|[[:space:]])image[[:space:]]*:[[:space:]]*\"([^\"]+)\"[[:space:]]*=\>[[:space:]]*\"([^\"]+)\" ]]; then
     old_ref="${BASH_REMATCH[2]}"
     new_ref="${BASH_REMATCH[3]}"
@@ -191,9 +206,23 @@ image_line_is_downgrade() {
     old_core="$(version_core "$old_tag")"
     new_core="$(version_core "$new_tag")"
     if [[ -n "$old_core" && -n "$new_core" ]]; then
+      if numeric_core_is_higher "$new_core" "$old_core"; then
+        return 1
+      fi
       if numeric_core_is_higher "$old_core" "$new_core"; then
         return 0
       fi
+      old_bare="${old_tag#v}"
+      new_bare="${new_tag#v}"
+      if [[ "$old_bare" == "$new_bare" ]]; then
+        return 1
+      fi
+      old_suffix="$(version_suffix "$old_tag")"
+      new_suffix="$(version_suffix "$new_tag")"
+      if [[ "$old_suffix" != "$new_suffix" ]]; then
+        return 0
+      fi
+      # 1.2 and 1.2.0 share a numeric core and have no suffix.
       return 1
     fi
     return 0
