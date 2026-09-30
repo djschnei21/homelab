@@ -49,3 +49,14 @@ jobs:
           done
           cd bootstrap/nomad
           ansible-playbook -i ../inventory.yml -e "patch_runner_host=${runner}" playbooks/patch_cluster.yml
+          # The Actions log store is not readable from outside the LAN.
+          nomad node status -no-color | while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            echo "::notice::${line}"
+          done
+          if nomad node status -no-color | awk 'NR>1 && $NF != "ready" { bad = 1 } END { exit bad+0 }'; then
+            echo "::notice::all nomad nodes ready"
+          else
+            echo "::error::a nomad node is not ready after patch"
+            exit 1
+          fi
