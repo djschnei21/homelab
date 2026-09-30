@@ -4,7 +4,7 @@ job "node-exporter" {
   type        = "system"
 
   meta {
-    version = "2026-02-01"
+    version = "2026-08-20"
   }
 
   group "exporters" {
@@ -19,7 +19,7 @@ job "node-exporter" {
       driver = "docker"
 
       config {
-        image        = "prom/node-exporter:v1.7.0"
+        image        = "prom/node-exporter:v1.12.1"
         network_mode = "host"
 
         args = [

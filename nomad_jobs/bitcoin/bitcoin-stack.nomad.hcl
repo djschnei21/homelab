@@ -3,7 +3,7 @@ job "bitcoin-stack" {
   namespace   = "bitcoin"
 
   meta {
-    version = "2026-02-01"
+    version = "2026-08-20-v4"
   }
 
   # Bitcoin Core - base layer, no dependencies
@@ -141,7 +141,7 @@ job "bitcoin-stack" {
       driver = "docker"
 
       config {
-        image   = "busybox:1.36"
+        image   = "busybox:1.38.0"
         command = "sh"
         args    = ["-c", "echo 'Waiting for bitcoin-rpc...'; until nc -z $BITCOIN_HOST $BITCOIN_PORT; do echo 'bitcoin-rpc not ready, retrying...'; sleep 5; done; echo 'bitcoin-rpc is available'"]
       }
@@ -182,9 +182,11 @@ EOF
       config {
         image = "getumbrel/electrs:v0.11.1"
         args = [
+          "--skip-default-conf-files",
           "--log-filters", "INFO",
-          "--db-dir", "/data/electrs",
-          "--daemon-dir", "/data/bitcoin",
+          "--db-dir", "/opt/electrs",
+          "--daemon-dir", "/opt/bitcoin",
+          "--cookie-file", "/opt/bitcoin/.cookie",
           "--daemon-rpc-addr", "${BITCOIN_RPC}",
           "--daemon-p2p-addr", "${BITCOIN_P2P}",
           "--electrum-rpc-addr", "0.0.0.0:${NOMAD_PORT_electrs_rpc}"
@@ -196,13 +198,13 @@ EOF
 
       volume_mount {
         volume      = "electrs-data"
-        destination = "/data/electrs"
+        destination = "/opt/electrs"
         read_only   = false
       }
 
       volume_mount {
         volume      = "bitcoin-data"
-        destination = "/data/bitcoin"
+        destination = "/opt/bitcoin"
         read_only   = true
       }
 
@@ -255,7 +257,7 @@ EOF
       driver = "docker"
 
       config {
-        image   = "busybox:1.36"
+        image   = "busybox:1.38.0"
         command = "sh"
         args = ["-c", <<EOF
 echo 'Waiting for mariadb...'
@@ -346,7 +348,7 @@ CORE_RPC_PORT={{ .Port }}
 ELECTRUM_HOST={{ .Address }}
 ELECTRUM_PORT={{ .Port }}
 {{ end }}
-{{ with nomadVar "nomad/jobs/bitcoin" }}
+{{ with nomadVar "nomad/jobs/bitcoin-stack/backend" }}
 CORE_RPC_USERNAME={{ .rpc_user }}
 CORE_RPC_PASSWORD={{ .rpc_password }}
 {{ end }}
@@ -463,7 +465,7 @@ EOF
       driver = "docker"
 
       config {
-        image   = "busybox:1.36"
+        image   = "busybox:1.38.0"
         command = "sh"
         args    = ["-c", "echo 'Waiting for electrs-rpc...'; until nc -z $ELECTRS_HOST $ELECTRS_PORT; do echo 'electrs-rpc not ready, retrying...'; sleep 5; done; echo 'electrs-rpc is available'"]
       }
@@ -492,8 +494,8 @@ EOF
         destination = "${NOMAD_SECRETS_DIR}/env.txt"
         env         = true
         data        = <<EOT
-AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/albyhub" }}{{ .AUTO_UNLOCK_PASSWORD }}{{ end }}
-DATABASE_URI=postgresql://albyhub:{{ with nomadVar "nomad/jobs/albyhub" }}{{ .DB_PASSWORD }}{{ end }}@192.168.68.50:5432/nwc?sslmode=disable
+AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/albyhub" }}{{ .AUTO_UNLOCK_PASSWORD }}{{ end }}
+DATABASE_URI=postgresql://albyhub:{{ with nomadVar "nomad/jobs/bitcoin-stack/albyhub" }}{{ .DB_PASSWORD }}{{ end }}@192.168.68.50:5432/nwc?sslmode=disable
 EOT
       }
 
