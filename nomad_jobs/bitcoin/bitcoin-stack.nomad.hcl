@@ -315,7 +315,7 @@ EOF
       }
 
       config {
-        image = "mariadb:11.4"
+        image = "mariadb:10.5.29"
         ports = ["mariadb"]
       }
 
@@ -356,7 +356,7 @@ EOF
       }
 
       config {
-        image = "mempool/backend:latest"
+        image = "mempool/backend:v3.3.1"
         ports = ["backend"]
       }
 
@@ -397,7 +397,7 @@ EOF
       driver = "docker"
 
       config {
-        image = "mempool/frontend:latest"
+        image = "mempool/frontend:v3.3.1"
         ports = ["frontend"]
       }
 
