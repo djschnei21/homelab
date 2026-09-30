@@ -18,10 +18,23 @@
       debug:
         msg: "{{ node_status.stdout_lines }}"
 
+    # copy does not create parent directories. A manual run has no workflow
+    # mkdir, and a missing directory must not be the thing that stops apt.
+    - name: Ensure the patch result directory exists
+      delegate_to: localhost
+      connection: local
+      become: false
+      ansible.builtin.file:
+        path: /tmp/homelab-patch-results
+        state: directory
+
 - name: Patch Nomad Clients
   hosts: nomad_clients
   serial: 1
   become: true
+  # A failed host must stop the server play. Rebooting the server on top of a
+  # half-patched client is how the cluster ends up neither updated nor running.
+  any_errors_fatal: true
   tasks:
     - name: Get node ID
       command: nomad node status -self -json
@@ -37,72 +50,108 @@
       debug:
         msg: "Patching node {{ node_name }} ({{ node_id }})"
 
-    - name: Enable drain with deadline
-      command: nomad node drain -enable -deadline 15m -yes -self
-      register: drain_result
+    # A failure after drain used to leave the client ineligible. Put it back
+    # into service, then fail the host so the roll stops.
+    - name: Patch one client and return it to service
+      block:
+        - name: Enable drain with deadline
+          command: nomad node drain -enable -deadline 15m -yes -self
+          register: drain_result
 
-    - name: Wait for drain to complete
-      command: nomad node status -self -json
-      register: drain_status
-      until: >
-        (drain_status.stdout | from_json).SchedulingEligibility == 'ineligible' and
-        ((drain_status.stdout | from_json).DrainStrategy == None or
-         (drain_status.stdout | from_json).LastDrain.Status == 'complete')
-      retries: 90
-      delay: 10
-      changed_when: false
+        # DrainStrategy is nil only after the drain finishes. LastDrain.Status
+        # is the wrong signal: a null LastDrain fails this task at once, and a
+        # previous "complete" would start apt while allocs are still moving.
+        # The deadline force-stops leftovers at 15m, so the wait has to run
+        # past that or the rescue undrains and the roll never reaches apt.
+        - name: Wait for drain to complete
+          command: nomad node status -self -json
+          register: drain_status
+          until: >-
+            (drain_status.stdout | from_json).SchedulingEligibility == 'ineligible' and
+            (drain_status.stdout | from_json).DrainStrategy is none
+          retries: 120
+          delay: 10
+          changed_when: false
 
-    - name: Update package cache and upgrade packages
-      apt:
-        update_cache: yes
-        upgrade: dist
-      register: apt_result
+        - name: Update package cache and upgrade packages
+          apt:
+            update_cache: yes
+            upgrade: dist
+          register: apt_result
 
-    - name: Check if reboot is required
-      stat:
-        path: /var/run/reboot-required
-      register: reboot_required
+        - name: Check if reboot is required
+          stat:
+            path: /var/run/reboot-required
+          register: reboot_required
 
-    - name: Reboot if required
-      reboot:
-        reboot_timeout: 600
-        connect_timeout: 300
-        test_command: uptime
-      when: reboot_required.stat.exists or apt_result.changed
+        # A timeout here fails the host while it is still drained. A slow card
+        # has to be allowed to come back so the undrain below can run.
+        - name: Reboot if required
+          reboot:
+            reboot_timeout: 1200
+            connect_timeout: 300
+            test_command: uptime
+          when: reboot_required.stat.exists or apt_result.changed
 
-    - name: Wait for Nomad agent to be ready
-      command: nomad node status -self -json
-      register: nomad_status
-      until: nomad_status.rc == 0
-      retries: 30
-      delay: 10
-      changed_when: false
+        - name: Wait for Nomad agent to be ready
+          command: nomad node status -self -json
+          register: nomad_status
+          until: nomad_status.rc == 0
+          retries: 60
+          delay: 10
+          changed_when: false
 
-    - name: Disable drain (make node eligible)
-      command: nomad node drain -disable -yes -self
+        - name: Disable drain (make node eligible)
+          command: nomad node drain -disable -yes -self
 
-    - name: Wait for node to be eligible
-      command: nomad node status -self -json
-      register: eligibility_status
-      until: (eligibility_status.stdout | from_json).SchedulingEligibility == 'eligible'
-      retries: 30
-      delay: 5
-      changed_when: false
+        - name: Wait for node to be eligible
+          command: nomad node status -self -json
+          register: eligibility_status
+          until: (eligibility_status.stdout | from_json).SchedulingEligibility == 'eligible'
+          retries: 30
+          delay: 5
+          changed_when: false
+      rescue:
+        - name: Disable drain after a failed patch
+          command: nomad node drain -disable -yes -self
+          failed_when: false
 
+        - name: Stop the roll after the client is eligible again
+          fail:
+            msg: "client patch failed; drain disabled so the node can take work again"
+
+    # any_errors_fatal is on so the server is not patched after a real client
+    # failure. This wait is not the upgrade; it must not stop the roll.
     - name: Wait for allocations to be placed
       block:
         - name: Give scheduler time to place allocations
           pause:
             seconds: 30
+          failed_when: false
 
         - name: Get node allocation status
           command: nomad node status -self -json
           register: node_alloc_status
           changed_when: false
+          failed_when: false
 
         - name: Display allocation count
           debug:
             msg: "Node {{ node_name }} has {{ (node_alloc_status.stdout | from_json).Allocations | default([]) | length }} allocations"
+          failed_when: false
+
+    # A missing notice must not look like a failed upgrade, and it must not
+    # skip the server. The client is already eligible; the workflow rejects a
+    # play that wrote no line.
+    - name: Record host patch result for the CI notice
+      delegate_to: localhost
+      connection: local
+      become: false
+      changed_when: false
+      failed_when: false
+      ansible.builtin.copy:
+        dest: "/tmp/homelab-patch-results/{{ inventory_hostname }}.txt"
+        content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled=false\n"
 
 - name: Patch Nomad Server
   hosts: nomad_servers
@@ -123,12 +172,26 @@
         path: /var/run/reboot-required
       register: reboot_required
 
+    # The runner service name is not the inventory hostname. An in-band reboot
+    # of the machine running the job kills it before GitHub records the result.
+    - name: Decide whether this host is the Actions runner
+      set_fact:
+        host_is_runner: >-
+          {{
+            inventory_hostname == (patch_runner_host | default(''))
+            or (ansible_hostname | default('')) == (patch_runner_host | default(''))
+            or (ansible_default_ipv4.address | default('')) in (patch_runner_ips | default('')).split()
+            or (ansible_all_ipv4_addresses | default([]) | intersect((patch_runner_ips | default('')).split()) | length) > 0
+          }}
+
     - name: Reboot if required
       reboot:
-        reboot_timeout: 600
+        reboot_timeout: 1200
         connect_timeout: 300
         test_command: uptime
-      when: reboot_required.stat.exists or apt_result.changed
+      when:
+        - reboot_required.stat.exists or apt_result.changed
+        - not host_is_runner
 
     - name: Wait for Nomad server to be ready
       command: nomad server members
@@ -146,3 +209,27 @@
     - name: Display final cluster status
       debug:
         msg: "{{ final_node_status.stdout_lines }}"
+
+    # CI sets patch_defer_runner_reboot so this job can queue the post-boot
+    # check and exit before the machine goes down. A manual run schedules the
+    # reboot here, only after Nomad has answered.
+    - name: Schedule reboot of the CI runner host
+      command: shutdown -r +2 "homelab infra patch"
+      when:
+        - reboot_required.stat.exists or apt_result.changed
+        - host_is_runner
+        - not (patch_defer_runner_reboot | default(false) | bool)
+      register: scheduled_reboot
+
+    - name: Note a reboot the CI job still has to schedule
+      set_fact:
+        runner_reboot_deferred: "{{ (reboot_required.stat.exists or apt_result.changed) and (host_is_runner | bool) and (patch_defer_runner_reboot | default(false) | bool) }}"
+
+    - name: Record host patch result for the CI notice
+      delegate_to: localhost
+      connection: local
+      become: false
+      changed_when: false
+      ansible.builtin.copy:
+        dest: "/tmp/homelab-patch-results/{{ inventory_hostname }}.txt"
+        content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled={{ (scheduled_reboot is changed) or (runner_reboot_deferred | bool) }}\n"

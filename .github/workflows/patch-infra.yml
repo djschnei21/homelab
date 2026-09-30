@@ -1,0 +1,115 @@
+name: Patch cluster hosts
+
+# Self-hosted because GitHub-hosted runners cannot reach the Pis.
+# Job specs deploy through reconcile.yml. This play dist-upgrades and reboots,
+# so it does not run on push. Merge does not start it.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * 1"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: homelab-cluster
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: [self-hosted, homelab]
+    env:
+      # The readiness check runs on the runner, not on a Nomad agent.
+      NOMAD_ADDR: http://192.168.68.65:4646
+      # Not a default Actions variable. set -u would abort before shutdown.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch Nomad hosts
+        run: |
+          set -euo pipefail
+          runner="$(hostname -s)"
+          runner_ips="$(hostname -I 2>/dev/null || true)"
+          echo "::notice::infra patch runner ${runner} user $(id -un) ips ${runner_ips}"
+          case "$runner" in
+            pinode2|pinode3|pinode4)
+              echo "::error::infra patch runner is ${runner}, a Nomad client; draining it would kill this job"
+              exit 1
+              ;;
+          esac
+          for host in pinode2 pinode3 pinode4; do
+            client_ip="$(getent ahostsv4 "${host}.local" | awk '{print $1; exit}')"
+            if [[ -n "$client_ip" && " ${runner_ips} " == *" ${client_ip} "* ]]; then
+              echo "::error::infra patch runner address ${client_ip} is ${host}, a Nomad client; draining it would kill this job"
+              exit 1
+            fi
+          done
+          if ! command -v ansible-playbook >/dev/null 2>&1; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ansible
+          fi
+          for host in pinode1 pinode2 pinode3 pinode4; do
+            if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "dan@${host}.local" true; then
+              echo "::error::ssh to dan@${host}.local failed"
+              exit 1
+            fi
+          done
+          cd bootstrap/nomad
+          mkdir -p /tmp/homelab-patch-results
+          find /tmp/homelab-patch-results -mindepth 1 -delete
+          ansible-playbook -i ../inventory.yml \
+            -e "patch_runner_host=${runner}" \
+            -e "{\"patch_runner_ips\":\"${runner_ips}\"}" \
+            -e patch_defer_runner_reboot=true \
+            playbooks/patch_cluster.yml
+          # One line per host. The Actions log store is not readable from outside the LAN.
+          for host in pinode1 pinode2 pinode3 pinode4; do
+            result="/tmp/homelab-patch-results/${host}.txt"
+            if [[ ! -f "$result" ]]; then
+              echo "::error::no patch result for ${host}"
+              exit 1
+            fi
+            line="$(tr -d '\n' <"$result")"
+            echo "::notice::${line}"
+          done
+          # The Actions log store is not readable from outside the LAN.
+          # A hung agent must fail this step, not run until the reboot kills it.
+          # Three clients. A header-only reply is not a healthy cluster.
+          # Reboot the runner only after this passes and the follow-up is queued,
+          # so a down client does not lose the server on top of the failed roll.
+          status_out="$(mktemp)"
+          if timeout 15 nomad node status -no-color >"$status_out" 2>&1 \
+            && awk 'NR>1 && NF { n++; if ($NF != "ready") bad = 1 } END { exit !(n >= 3 && !bad) }' "$status_out"; then
+            nodes_ready=1
+          else
+            nodes_ready=0
+          fi
+          while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            echo "::notice::${line}"
+          done <"$status_out"
+          rm -f "$status_out"
+          if [[ "$nodes_ready" -eq 1 ]]; then
+            echo "::notice::all nomad nodes ready"
+          else
+            echo "::error::a nomad node is not ready after patch"
+            exit 1
+          fi
+          if grep -q 'reboot_scheduled=True' /tmp/homelab-patch-results/*.txt; then
+            echo "::notice::runner host reboot is scheduled; Nomad is checked again after boot"
+            code="$(curl -sS --max-time 30 -o /tmp/homelab-dispatch-body -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/patch-ready.yml/dispatches" \
+              -d "{\"ref\":\"${GITHUB_REF_NAME}\",\"inputs\":{\"attempt\":\"0\"}}")"
+            if [[ "$code" != "204" ]]; then
+              echo "::error::recheck dispatch failed with HTTP ${code}"
+              exit 1
+            fi
+            echo "::notice::runner host reboots in one minute"
+            sudo shutdown -r +1 "homelab infra patch"
+          fi

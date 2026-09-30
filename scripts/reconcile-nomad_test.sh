@@ -135,6 +135,14 @@ EOF
       fi
       return 0
       ;;
+    "node status")
+      printf '%s\n' 'ID  DC  Name  Status' 'abc  homelab  pinode2  ready'
+      return 0
+      ;;
+    "job inspect")
+      printf '%s\n' 'bitcoin-stack/bitcoind image=bitcoin/bitcoin:31.1 cpu=1500 memory=4096'
+      return 0
+      ;;
     *)
       echo "unexpected nomad invocation: $*" >&2
       return 96
@@ -185,21 +193,27 @@ check "exit 1 is changes and applies" assert_eq "$(plan_of 1 $'+/- Job: "x"\n+/-
 check "exit 1 without diff text still applies" assert_eq "$(plan_of 1 $'Scheduler dry-run:\n- All tasks successfully allocated.\n\nJob Modify Index: 6')" "apply 6"
 check "exit 255 is error" assert_eq "$(plan_of 255 $'Error during plan')" "error plan-exit-255"
 check "missing index does not apply" assert_eq "$(plan_of 0 $'+/- Job: "x"\n+/- Priority: "1" => "2"')" "error missing-check-index"
-check "memory downgrade is refused" assert_eq "$(plan_of 1 $'+/- MemoryMB: "4096" => "2048"\n\nJob Modify Index: 5')" "refuse"
-check "cpu downgrade is refused" assert_eq "$(plan_of 0 $'+/- CPU: "1500" => "500"\n\nJob Modify Index: 5')" "refuse"
-check "memory max downgrade is refused" assert_eq "$(plan_of 0 $'+/- MemoryMaxMB: "8192" => "4096"\n\nJob Modify Index: 5')" "refuse"
+assert_refuse() {
+  local got="$1" needle="$2"
+  [[ "$got" == "refuse "* && "$got" == *"$needle"* ]]
+}
+
+check "memory downgrade is refused" assert_refuse "$(plan_of 1 $'+/- MemoryMB: "4096" => "2048"\n\nJob Modify Index: 5')" 'MemoryMB: "4096" => "2048"'
+check "cpu downgrade is refused" assert_refuse "$(plan_of 0 $'+/- CPU: "1500" => "500"\n\nJob Modify Index: 5')" 'CPU: "1500" => "500"'
+check "memory max downgrade is refused" assert_refuse "$(plan_of 0 $'+/- MemoryMaxMB: "8192" => "4096"\n\nJob Modify Index: 5')" 'MemoryMaxMB: "8192" => "4096"'
 check "memory upgrade still applies" assert_eq "$(plan_of 0 $'+/- MemoryMB: "2048" => "4096"\n\nJob Modify Index: 5')" "apply 5"
 check "equal specs still apply" assert_eq "$(plan_of 0 $'+/- CPU: "1500" => "1500"\n+/- MemoryMB: "4096" => "4096"\n+/- image: "app:1.2.0" => "app:1.2.0"\n+/- Meta[version]: "1" => "2"\n\nJob Modify Index: 4')" "apply 4"
-check "image downgrade is refused" assert_eq "$(plan_of 1 $'+/- image: "bitcoin/bitcoin:31.1" => "bitcoin/bitcoin:30.2"\n\nJob Modify Index: 5')" "refuse"
-check "v-prefixed image downgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "getumbrel/electrs:v0.11.1" => "getumbrel/electrs:v0.10.10"\n\nJob Modify Index: 5')" "refuse"
-check "shorter dotted downgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "app:1.2.1" => "app:1.2"\n\nJob Modify Index: 5')" "refuse"
-check "numeric minor downgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "app:1.10" => "app:1.9"\n\nJob Modify Index: 5')" "refuse"
-check "registry port tag downgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "localhost:5000/app:2.1" => "localhost:5000/app:1.0"\n\nJob Modify Index: 5')" "refuse"
+check "image downgrade is refused" assert_refuse "$(plan_of 1 $'+/- image: "bitcoin/bitcoin:31.1" => "bitcoin/bitcoin:30.2"\n\nJob Modify Index: 5')" 'image: "bitcoin/bitcoin:31.1" => "bitcoin/bitcoin:30.2"'
+check "v-prefixed image downgrade is refused" assert_refuse "$(plan_of 0 $'+/- image: "getumbrel/electrs:v0.11.1" => "getumbrel/electrs:v0.10.10"\n\nJob Modify Index: 5')" 'getumbrel/electrs:v0.11.1'
+check "shorter dotted downgrade is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:1.2.1" => "app:1.2"\n\nJob Modify Index: 5')" 'image: "app:1.2.1" => "app:1.2"'
+check "numeric minor downgrade is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:1.10" => "app:1.9"\n\nJob Modify Index: 5')" 'image: "app:1.10" => "app:1.9"'
+check "registry port tag downgrade is refused" assert_refuse "$(plan_of 0 $'+/- image: "localhost:5000/app:2.1" => "localhost:5000/app:1.0"\n\nJob Modify Index: 5')" 'localhost:5000/app:2.1'
 check "image upgrade still applies" assert_eq "$(plan_of 0 $'+/- image: "ghcr.io/getalby/hub:v1.21.4" => "ghcr.io/getalby/hub:v1.24.0"\n\nJob Modify Index: 5')" "apply 5"
 check "leading v equal to pin still applies" assert_eq "$(plan_of 0 $'+/- image: "app:v1.2.0" => "app:1.2.0"\n\nJob Modify Index: 5')" "apply 5"
 check "latest to pin is not a downgrade" assert_eq "$(plan_of 0 $'+/- image: "app:latest" => "app:1.2.3"\n\nJob Modify Index: 5')" "apply 5"
 check "pin to latest is not a downgrade" assert_eq "$(plan_of 0 $'+/- image: "app:1.2.3" => "app:latest"\n\nJob Modify Index: 5')" "apply 5"
-check "image downgrade with memory upgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "app:2.0" => "app:1.0"\n+/- MemoryMB: "256" => "512"\n\nJob Modify Index: 5')" "refuse"
+check "image downgrade with memory upgrade is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:2.0" => "app:1.0"\n+/- MemoryMB: "256" => "512"\n\nJob Modify Index: 5')" 'image: "app:2.0" => "app:1.0"'
+check "annotated image upgrade still applies" assert_eq "$(plan_of 0 $'+/- image:           "bitcoin/bitcoin:30.2" => "bitcoin/bitcoin:31.1" (forces create/destroy update)\n\nJob Modify Index: 5')" "apply 5"
 
 rm -rf "$TMP/tree/nomad_jobs"
 : >"$CALLS"
@@ -241,16 +255,29 @@ write_job "nomad_jobs/plugins/a-downgrade.nomad.hcl" 'job "downgrade" { group "g
 write_job "nomad_jobs/plugins/z-okup.nomad.hcl" 'job "okup" { group "g" {} }'
 LOG="$TMP/downgrade.log"
 set +e
-( main >"$LOG" 2>&1 )
+( GITHUB_ACTIONS=1 main >"$LOG" 2>&1 )
 main_rc=$?
 set -e
 check "downgrade refuses the run" assert_eq "$main_rc" "1"
 check "downgrade plan was printed" grep -q 'MemoryMB: "4096" => "2048"' "$LOG"
 check "downgrade job recorded as refused" grep -q "refused downgrade: nomad_jobs/plugins/a-downgrade.nomad.hcl" "$LOG"
+check "downgrade is a checks annotation" grep -q "::error::refused downgrade: nomad_jobs/plugins/a-downgrade.nomad.hcl" "$LOG"
 check "downgrade plan secret redacted" assert_file_lacks "$LOG" "downgrade-secret"
 check "downgrade was not submitted" bash -c "! grep -q 'job run .*downgrade.nomad.hcl' '$CALLS'"
 check "non-downgrade still submitted after refusal" grep -q "job run -check-index 30 -namespace=default -no-color nomad_jobs/plugins/z-okup.nomad.hcl" "$CALLS"
 check "downgrade run did not pass detach" bash -c "! grep -q -- '-detach' '$CALLS'"
+
+: >"$CALLS"
+rm -rf "$TMP/tree/nomad_jobs"
+write_job "nomad_jobs/plugins/noop.nomad.hcl" 'job "noop" { group "g" {} }'
+LOG="$TMP/status.log"
+set +e
+( RECONCILE_STATUS=1 GITHUB_ACTIONS=1 main >"$LOG" 2>&1 )
+main_rc=$?
+set -e
+check "status probe exits 0" assert_eq "$main_rc" "0"
+check "node status noticed" grep -q '::notice::node ' "$LOG"
+check "registered task noticed" grep -q '::notice::registered bitcoin-stack/bitcoind image=bitcoin/bitcoin:31.1' "$LOG"
 
 : >"$CALLS"
 rm -rf "$TMP/tree/nomad_jobs"
@@ -280,6 +307,76 @@ check "workflow is self-hosted" grep -q 'self-hosted, homelab' "$WF"
 check "workflow does not cancel in progress" grep -q 'cancel-in-progress: false' "$WF"
 check "workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$WF"
 check "workflow comment tracks deployment" grep -q 'until the deployment succeeds' "$WF"
+check "workflow shares the cluster lock" grep -q 'group: homelab-cluster' "$WF"
+check "workflow records registered tasks" grep -q 'RECONCILE_STATUS: "1"' "$WF"
+
+PATCH="$ROOT/.github/workflows/patch-infra.yml"
+check "patch workflow has no pull_request" bash -c "! grep -q pull_request '$PATCH'"
+check "patch workflow is self-hosted" grep -q 'self-hosted, homelab' "$PATCH"
+check "patch workflow does not cancel in progress" grep -q 'cancel-in-progress: false' "$PATCH"
+check "patch workflow shares the cluster lock" grep -q 'group: homelab-cluster' "$PATCH"
+check "patch workflow can be dispatched" grep -q 'workflow_dispatch' "$PATCH"
+check "patch workflow is scheduled" grep -q 'cron:' "$PATCH"
+check "patch workflow runs the patch playbook" grep -q 'playbooks/patch_cluster.yml' "$PATCH"
+check "patch ssh keeps host key checking" bash -c "! grep -q 'StrictHostKeyChecking=no' '$PATCH' && ! grep -q 'UserKnownHostsFile=/dev/null' '$PATCH' && ! grep -q 'ANSIBLE_HOST_KEY_CHECKING' '$PATCH'"
+check "patch workflow passes the actions token" grep -q 'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}' "$PATCH"
+check "patch playbook creates the result directory" grep -q 'state: directory' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "patch workflow does not run on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$PATCH'"
+check "patch workflow reports node status" grep -q 'nomad node status -no-color' "$PATCH"
+check "patch workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$PATCH"
+check "patch workflow fails if a node is not ready" grep -q 'a nomad node is not ready after patch' "$PATCH"
+check "patch workflow publishes per-host results" grep -q 'homelab-patch-results' "$PATCH"
+check "patch playbook records apt result" grep -q 'apt_changed=' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "patch workflow passes runner addresses" grep -q 'patch_runner_ips' "$PATCH"
+check "patch playbook detects the runner by address" grep -q 'host_is_runner' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "patch playbook stops the roll when a client fails" grep -q 'any_errors_fatal: true' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "patch playbook undrains a failed client" grep -q 'drain disabled so the node can take work again' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "drain wait outlasts the deadline" awk '
+  /Wait for drain to complete/ { waiting = 1 }
+  waiting && /retries:/ { if (($2 + 0) < 120) exit 1; found = 1; waiting = 0 }
+  END { exit !found }
+' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "drain wait ignores LastDrain" bash -c "! grep -vE '^[[:space:]]*#' '$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml' | grep -q LastDrain"
+check "client reboot waits for a slow card" grep -q 'reboot_timeout: 1200' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "client result failure does not stop the server" awk '
+  /Record host patch result for the CI notice/ { n++ }
+  n == 1 && /failed_when: false/ { found = 1 }
+  n == 1 && /^- name: Patch Nomad Server/ { exit !found }
+  END { exit !(n >= 1 && found) }
+' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "patch result is recorded after the client is back" awk '
+  /Record host patch result for the CI notice/ { if (!seen) exit 1; found = 1 }
+  /Stop the roll after the client is eligible again/ { seen = 1 }
+  END { exit !(seen && found) }
+' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+
+READY="$ROOT/.github/workflows/patch-ready.yml"
+check "post-reboot check passes the actions token" grep -q 'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}' "$READY"
+check "recheck attempt is not interpolated into the script" bash -c "! grep -q 'attempt=\"\${{ github.event.inputs.attempt' '$READY'"
+check "patch workflow queues the post-reboot check" grep -q 'workflows/patch-ready.yml/dispatches' "$PATCH"
+check "post-reboot check is not on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$READY'"
+check "post-reboot check is dispatched" grep -q 'workflow_dispatch:' "$READY"
+check "post-reboot check stays on the homelab runner" bash -c "! grep -q 'ubuntu-latest' '$READY'"
+check "post-reboot check requeues while reboot is scheduled" grep -q 'requeued Nomad recheck attempt' "$READY"
+check "post-reboot check uses nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$READY"
+check "post-reboot check shares the cluster lock" grep -q 'group: homelab-cluster' "$READY"
+check "post-reboot check waits for three clients" grep -q 'n >= 3' "$READY"
+check "patch workflow requires three ready clients" grep -q 'n >= 3' "$PATCH"
+check "patch workflow defers the runner reboot" grep -q 'patch_defer_runner_reboot=true' "$PATCH"
+check "patch workflow reboots the runner after the readiness check" awk '
+  /a nomad node is not ready after patch/ { failed = 1 }
+  /workflows\/patch-ready.yml\/dispatches/ { if (!failed) exit 1; dispatched = 1 }
+  /shutdown -r \+1/ { if (!dispatched) exit 1; found = 1 }
+  END { exit !(failed && dispatched && found) }
+' "$PATCH"
+check "patch workflow bounds the nomad status call" grep -q 'timeout 15 nomad node status -no-color' "$PATCH"
+check "post-reboot check bounds the nomad status call" grep -q 'timeout 15 nomad node status -no-color' "$READY"
+check "manual runner reboot waits until nomad answers" awk '
+  /Wait for Nomad server to be ready/ { waited = 1 }
+  /shutdown -r \+2/ { if (!waited) exit 1; found = 1 }
+  END { exit !(waited && found) }
+' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "playbook can leave the runner reboot to CI" grep -q 'patch_defer_runner_reboot' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 
 if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
   echo "FAIL script references a forbidden command" >&2
