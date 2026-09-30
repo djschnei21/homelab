@@ -328,6 +328,11 @@ check "patch workflow passes runner addresses" grep -q 'patch_runner_ips' "$PATC
 check "patch playbook detects the runner by address" grep -q 'host_is_runner' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "patch playbook stops the roll when a client fails" grep -q 'any_errors_fatal: true' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "patch playbook undrains a failed client" grep -q 'drain disabled so the node can take work again' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "patch result is recorded after the client is back" awk '
+  /Record host patch result for the CI notice/ { if (!seen) exit 1; found = 1 }
+  /Stop the roll after the client is eligible again/ { seen = 1 }
+  END { exit !(seen && found) }
+' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 
 READY="$ROOT/.github/workflows/patch-ready.yml"
 check "patch workflow queues the post-reboot check" grep -q 'workflows/patch-ready.yml/dispatches' "$PATCH"
