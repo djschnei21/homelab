@@ -320,6 +320,7 @@ check "patch workflow is scheduled" grep -q 'cron:' "$PATCH"
 check "patch workflow runs the patch playbook" grep -q 'playbooks/patch_cluster.yml' "$PATCH"
 check "patch workflow does not run on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$PATCH'"
 check "patch workflow reports node status" grep -q 'nomad node status -no-color' "$PATCH"
+check "patch workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$PATCH"
 check "patch workflow fails if a node is not ready" grep -q 'a nomad node is not ready after patch' "$PATCH"
 
 if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
