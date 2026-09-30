@@ -5,11 +5,13 @@
 #   0   no allocations created or destroyed (a diff may still exist)
 #   1   allocations created or destroyed — changes, not a script failure
 #   255 error determining plan results
-# Exit 0 with an empty diff is a pass. A diff that lowers memory, CPU, or a
-# comparable image version is a downgrade and is not submitted. Any other real
-# diff is submitted with `nomad job run -check-index` and no -detach, so Nomad
-# tracks the deployment. Refused downgrades still fail the run after every
-# other job is handled.
+# Exit 0 with an empty diff is a pass. A diff that lowers memory or CPU is not
+# submitted. An image change is not submitted when the numeric core decreases,
+# or when the tags differ and the new tag is not a proven equal or higher
+# version (`latest`, a suffix rollback, or any tag that does not parse). Equal
+# numeric cores are not a downgrade. Any other real diff is submitted with
+# `nomad job run -check-index` and no -detach, so Nomad tracks the deployment.
+# Refused jobs still fail the run after every other job is handled.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -122,19 +124,22 @@ image_tag() {
   fi
 }
 
-# 0 when left is a higher dotted version than right. `latest` and any tag that
-# is not a dotted number (after one leading v) are not comparable.
-version_is_higher() {
-  local left="$1" right="$2"
-  if [[ -z "$left" || -z "$right" || "$left" == "latest" || "$right" == "latest" ]]; then
-    return 1
+# Dotted numeric core, or empty when the tag is not a version. One leading v
+# is optional. Suffix and build metadata (-alpine, +build) are not part of
+# the core: 1.24.0-rc.1 and 1.24.0 order as the same version.
+version_core() {
+  local tag="$1"
+  if [[ "$tag" == v* ]]; then
+    tag="${tag#v}"
   fi
-  left="${left#v}"
-  right="${right#v}"
-  if [[ ! "$left" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$right" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
-    return 1
+  if [[ "$tag" =~ ^([0-9]+(\.[0-9]+)*)([-+].+)?$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
   fi
+}
 
+# 0 when left's numeric core is strictly higher than right's.
+numeric_core_is_higher() {
+  local left="$1" right="$2"
   local IFS=.
   local -a left_parts=() right_parts=()
   read -r -a left_parts <<< "$left"
@@ -170,14 +175,28 @@ resource_line_is_downgrade() {
   return 1
 }
 
+# Fail closed. A lower numeric core is a downgrade. Any other tag change that
+# is not a proven equal or higher version — latest, or a tag that does not
+# parse — is refused too. Identical tags are not a change.
 image_line_is_downgrade() {
-  local line="$1" old_ref new_ref
+  local line="$1" old_ref new_ref old_tag new_tag old_core new_core
   if [[ "$line" =~ (^|[[:space:]])image[[:space:]]*:[[:space:]]*\"([^\"]+)\"[[:space:]]*=\>[[:space:]]*\"([^\"]+)\" ]]; then
     old_ref="${BASH_REMATCH[2]}"
     new_ref="${BASH_REMATCH[3]}"
-    if version_is_higher "$(image_tag "$old_ref")" "$(image_tag "$new_ref")"; then
-      return 0
+    old_tag="$(image_tag "$old_ref")"
+    new_tag="$(image_tag "$new_ref")"
+    if [[ "$old_tag" == "$new_tag" ]]; then
+      return 1
     fi
+    old_core="$(version_core "$old_tag")"
+    new_core="$(version_core "$new_tag")"
+    if [[ -n "$old_core" && -n "$new_core" ]]; then
+      if numeric_core_is_higher "$old_core" "$new_core"; then
+        return 0
+      fi
+      return 1
+    fi
+    return 0
   fi
   return 1
 }
@@ -228,7 +247,8 @@ plan_decision() {
     return 0
   fi
 
-  # A downgrade is refused: the cluster must not move backward even when main says so.
+  # Refused when main would move memory, CPU, or an image backward, or when an
+  # image change cannot be proved equal or higher.
   local reason=""
   if reason="$(plan_is_downgrade "$plan_file")"; then
     printf 'refuse %s\n' "$reason"
