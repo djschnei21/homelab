@@ -324,6 +324,8 @@ check "patch workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65
 check "patch workflow fails if a node is not ready" grep -q 'a nomad node is not ready after patch' "$PATCH"
 check "patch workflow publishes per-host results" grep -q 'homelab-patch-results' "$PATCH"
 check "patch playbook records apt result" grep -q 'apt_changed=' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "patch workflow passes runner addresses" grep -q 'patch_runner_ips' "$PATCH"
+check "patch playbook detects the runner by address" grep -q 'host_is_runner' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 
 READY="$ROOT/.github/workflows/patch-ready.yml"
 check "patch workflow queues the post-reboot check" grep -q 'workflows/patch-ready.yml/dispatches' "$PATCH"

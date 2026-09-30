@@ -33,13 +33,21 @@ jobs:
         run: |
           set -euo pipefail
           runner="$(hostname -s)"
-          echo "::notice::infra patch runner ${runner} user $(id -un)"
+          runner_ips="$(hostname -I 2>/dev/null || true)"
+          echo "::notice::infra patch runner ${runner} user $(id -un) ips ${runner_ips}"
           case "$runner" in
             pinode2|pinode3|pinode4)
               echo "::error::infra patch runner is ${runner}, a Nomad client; draining it would kill this job"
               exit 1
               ;;
           esac
+          for host in pinode2 pinode3 pinode4; do
+            client_ip="$(getent ahostsv4 "${host}.local" | awk '{print $1; exit}')"
+            if [[ -n "$client_ip" && " ${runner_ips} " == *" ${client_ip} "* ]]; then
+              echo "::error::infra patch runner address ${client_ip} is ${host}, a Nomad client; draining it would kill this job"
+              exit 1
+            fi
+          done
           if ! command -v ansible-playbook >/dev/null 2>&1; then
             sudo DEBIAN_FRONTEND=noninteractive apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ansible
@@ -53,7 +61,10 @@ jobs:
           cd bootstrap/nomad
           mkdir -p /tmp/homelab-patch-results
           find /tmp/homelab-patch-results -mindepth 1 -delete
-          ansible-playbook -i ../inventory.yml -e "patch_runner_host=${runner}" playbooks/patch_cluster.yml
+          ansible-playbook -i ../inventory.yml \
+            -e "patch_runner_host=${runner}" \
+            -e "{\"patch_runner_ips\":\"${runner_ips}\"}" \
+            playbooks/patch_cluster.yml
           # One line per host. The Actions log store is not readable from outside the LAN.
           for host in pinode1 pinode2 pinode3 pinode4; do
             result="/tmp/homelab-patch-results/${host}.txt"
