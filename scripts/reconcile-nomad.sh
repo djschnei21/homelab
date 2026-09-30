@@ -5,8 +5,11 @@
 #   0   no allocations created or destroyed (a diff may still exist)
 #   1   allocations created or destroyed — changes, not a script failure
 #   255 error determining plan results
-# Exit 0 with an empty diff is a pass. Any other real diff is submitted with
-# `nomad job run -check-index` and no -detach, so Nomad tracks the deployment.
+# Exit 0 with an empty diff is a pass. A diff that lowers memory, CPU, or a
+# comparable image version is a downgrade and is not submitted. Any other real
+# diff is submitted with `nomad job run -check-index` and no -detach, so Nomad
+# tracks the deployment. Refused downgrades still fail the run after every
+# other job is handled.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,7 +83,87 @@ job_name_from_file() {
   printf '%s\n' "$name"
 }
 
-# Prints one of: noop | apply <index> | error <reason>
+# Tag after the last slash. A colon earlier in the reference is a registry port.
+image_tag() {
+  local ref="$1" name
+  ref="${ref%%@*}"
+  name="${ref##*/}"
+  if [[ "$name" == *:* ]]; then
+    printf '%s\n' "${name##*:}"
+  fi
+}
+
+# 0 when left is a higher dotted version than right. `latest` and any tag that
+# is not a dotted number (after one leading v) are not comparable.
+version_is_higher() {
+  local left="$1" right="$2"
+  if [[ -z "$left" || -z "$right" || "$left" == "latest" || "$right" == "latest" ]]; then
+    return 1
+  fi
+  left="${left#v}"
+  right="${right#v}"
+  if [[ ! "$left" =~ ^[0-9]+(\.[0-9]+)*$ || ! "$right" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+    return 1
+  fi
+
+  local IFS=.
+  local -a left_parts=() right_parts=()
+  read -r -a left_parts <<< "$left"
+  read -r -a right_parts <<< "$right"
+
+  local i count left_n right_n
+  count=${#left_parts[@]}
+  if (( ${#right_parts[@]} > count )); then
+    count=${#right_parts[@]}
+  fi
+  for ((i = 0; i < count; i++)); do
+    left_n="${left_parts[$i]:-0}"
+    right_n="${right_parts[$i]:-0}"
+    if (( 10#$left_n > 10#$right_n )); then
+      return 0
+    fi
+    if (( 10#$left_n < 10#$right_n )); then
+      return 1
+    fi
+  done
+  return 1
+}
+
+resource_line_is_downgrade() {
+  local line="$1" old new
+  if [[ "$line" =~ (^|[[:space:]])(CPU|MemoryMB|MemoryMaxMB)[[:space:]]*:[[:space:]]*\"([0-9]+)\"[[:space:]]*=\>[[:space:]]*\"([0-9]+)\" ]]; then
+    old="${BASH_REMATCH[3]}"
+    new="${BASH_REMATCH[4]}"
+    if (( 10#$new < 10#$old )); then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+image_line_is_downgrade() {
+  local line="$1" old_ref new_ref
+  if [[ "$line" =~ (^|[[:space:]])image[[:space:]]*:[[:space:]]*\"([^\"]+)\"[[:space:]]*=\>[[:space:]]*\"([^\"]+)\" ]]; then
+    old_ref="${BASH_REMATCH[2]}"
+    new_ref="${BASH_REMATCH[3]}"
+    if version_is_higher "$(image_tag "$old_ref")" "$(image_tag "$new_ref")"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+plan_is_downgrade() {
+  local plan_file="$1" line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if resource_line_is_downgrade "$line" || image_line_is_downgrade "$line"; then
+      return 0
+    fi
+  done <"$plan_file"
+  return 1
+}
+
+# Prints one of: noop | apply <index> | refuse | error <reason>
 plan_decision() {
   local rc="$1" plan_file="$2" index="" has_diff=0
   local indexes=()
@@ -111,6 +194,12 @@ plan_decision() {
 
   if [[ "$has_diff" -eq 0 ]]; then
     printf 'noop\n'
+    return 0
+  fi
+
+  # A downgrade is refused: the cluster must not move backward even when main says so.
+  if plan_is_downgrade "$plan_file"; then
+    printf 'refuse\n'
     return 0
   fi
 
@@ -206,6 +295,10 @@ reconcile_one() {
       ;;
     apply\ *)
       index="${decision#apply }"
+      ;;
+    refuse)
+      echo "refused downgrade: ${file}"
+      return 1
       ;;
     error\ *)
       echo "plan error: ${decision#error }" >&2

@@ -84,6 +84,14 @@ nomad() {
           printf '%s\n' '+/- Job: "deployfail"' '+/- Count: "1" => "2" (forces create)' '' 'Scheduler dry-run:' '- All tasks successfully allocated.' '' 'Job Modify Index: 15'
           return 1
           ;;
+        *downgrade.nomad.hcl)
+          printf '%s\n' '+/- Job: "downgrade"' '      +/- MemoryMB: "4096" => "2048"' '      +/- CPU: "1500" => "500"' '      +/- image: "bitcoin/bitcoin:31.1" => "bitcoin/bitcoin:30.2"' 'rpcauth=downgrade-secret' '' 'Scheduler dry-run:' '- All tasks successfully allocated.' '' 'Job Modify Index: 21'
+          return 1
+          ;;
+        *okup.nomad.hcl)
+          printf '%s\n' '+/- Job: "okup"' '      +/- image: "ghcr.io/getalby/hub:v1.21.4" => "ghcr.io/getalby/hub:v1.24.0"' '      +/- MemoryMB: "512" => "1024"' '' 'Scheduler dry-run:' '- All tasks successfully allocated.' '' 'Job Modify Index: 30'
+          return 0
+          ;;
         *)
           echo "unexpected plan spec $spec" >&2
           return 97
@@ -177,6 +185,21 @@ check "exit 1 is changes and applies" assert_eq "$(plan_of 1 $'+/- Job: "x"\n+/-
 check "exit 1 without diff text still applies" assert_eq "$(plan_of 1 $'Scheduler dry-run:\n- All tasks successfully allocated.\n\nJob Modify Index: 6')" "apply 6"
 check "exit 255 is error" assert_eq "$(plan_of 255 $'Error during plan')" "error plan-exit-255"
 check "missing index does not apply" assert_eq "$(plan_of 0 $'+/- Job: "x"\n+/- Priority: "1" => "2"')" "error missing-check-index"
+check "memory downgrade is refused" assert_eq "$(plan_of 1 $'+/- MemoryMB: "4096" => "2048"\n\nJob Modify Index: 5')" "refuse"
+check "cpu downgrade is refused" assert_eq "$(plan_of 0 $'+/- CPU: "1500" => "500"\n\nJob Modify Index: 5')" "refuse"
+check "memory max downgrade is refused" assert_eq "$(plan_of 0 $'+/- MemoryMaxMB: "8192" => "4096"\n\nJob Modify Index: 5')" "refuse"
+check "memory upgrade still applies" assert_eq "$(plan_of 0 $'+/- MemoryMB: "2048" => "4096"\n\nJob Modify Index: 5')" "apply 5"
+check "equal specs still apply" assert_eq "$(plan_of 0 $'+/- CPU: "1500" => "1500"\n+/- MemoryMB: "4096" => "4096"\n+/- image: "app:1.2.0" => "app:1.2.0"\n+/- Meta[version]: "1" => "2"\n\nJob Modify Index: 4')" "apply 4"
+check "image downgrade is refused" assert_eq "$(plan_of 1 $'+/- image: "bitcoin/bitcoin:31.1" => "bitcoin/bitcoin:30.2"\n\nJob Modify Index: 5')" "refuse"
+check "v-prefixed image downgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "getumbrel/electrs:v0.11.1" => "getumbrel/electrs:v0.10.10"\n\nJob Modify Index: 5')" "refuse"
+check "shorter dotted downgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "app:1.2.1" => "app:1.2"\n\nJob Modify Index: 5')" "refuse"
+check "numeric minor downgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "app:1.10" => "app:1.9"\n\nJob Modify Index: 5')" "refuse"
+check "registry port tag downgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "localhost:5000/app:2.1" => "localhost:5000/app:1.0"\n\nJob Modify Index: 5')" "refuse"
+check "image upgrade still applies" assert_eq "$(plan_of 0 $'+/- image: "ghcr.io/getalby/hub:v1.21.4" => "ghcr.io/getalby/hub:v1.24.0"\n\nJob Modify Index: 5')" "apply 5"
+check "leading v equal to pin still applies" assert_eq "$(plan_of 0 $'+/- image: "app:v1.2.0" => "app:1.2.0"\n\nJob Modify Index: 5')" "apply 5"
+check "latest to pin is not a downgrade" assert_eq "$(plan_of 0 $'+/- image: "app:latest" => "app:1.2.3"\n\nJob Modify Index: 5')" "apply 5"
+check "pin to latest is not a downgrade" assert_eq "$(plan_of 0 $'+/- image: "app:1.2.3" => "app:latest"\n\nJob Modify Index: 5')" "apply 5"
+check "image downgrade with memory upgrade is refused" assert_eq "$(plan_of 0 $'+/- image: "app:2.0" => "app:1.0"\n+/- MemoryMB: "256" => "512"\n\nJob Modify Index: 5')" "refuse"
 
 rm -rf "$TMP/tree/nomad_jobs"
 : >"$CALLS"
@@ -211,6 +234,23 @@ set -e
 check "plan error fails the run" assert_eq "$main_rc" "1"
 check "later file still planned after plan error" grep -q "z-inplace.nomad.hcl" "$CALLS"
 check "plan error was not submitted" bash -c "! grep -q 'job run .*planerr.nomad.hcl' '$CALLS'"
+
+: >"$CALLS"
+rm -rf "$TMP/tree/nomad_jobs"
+write_job "nomad_jobs/plugins/a-downgrade.nomad.hcl" 'job "downgrade" { group "g" {} }'
+write_job "nomad_jobs/plugins/z-okup.nomad.hcl" 'job "okup" { group "g" {} }'
+LOG="$TMP/downgrade.log"
+set +e
+( main >"$LOG" 2>&1 )
+main_rc=$?
+set -e
+check "downgrade refuses the run" assert_eq "$main_rc" "1"
+check "downgrade plan was printed" grep -q 'MemoryMB: "4096" => "2048"' "$LOG"
+check "downgrade job recorded as refused" grep -q "refused downgrade: nomad_jobs/plugins/a-downgrade.nomad.hcl" "$LOG"
+check "downgrade plan secret redacted" assert_file_lacks "$LOG" "downgrade-secret"
+check "downgrade was not submitted" bash -c "! grep -q 'job run .*downgrade.nomad.hcl' '$CALLS'"
+check "non-downgrade still submitted after refusal" grep -q "job run -check-index 30 -namespace=default -no-color nomad_jobs/plugins/z-okup.nomad.hcl" "$CALLS"
+check "downgrade run did not pass detach" bash -c "! grep -q -- '-detach' '$CALLS'"
 
 : >"$CALLS"
 rm -rf "$TMP/tree/nomad_jobs"
