@@ -1,0 +1,31 @@
+name: Reconcile Nomad jobs
+
+# Self-hosted because GitHub-hosted runners cannot reach Nomad.
+# Restarts are applied. The run is not detached: Nomad tracks the job
+# until the deployment succeeds.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nomad-reconcile
+  cancel-in-progress: false
+
+env:
+  NOMAD_ADDR: http://192.168.68.65:4646
+
+jobs:
+  reconcile:
+    runs-on: [self-hosted, homelab]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconcile Nomad jobs
+        run: scripts/reconcile-nomad.sh
