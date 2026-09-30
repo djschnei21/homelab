@@ -328,6 +328,19 @@ check "patch workflow passes runner addresses" grep -q 'patch_runner_ips' "$PATC
 check "patch playbook detects the runner by address" grep -q 'host_is_runner' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "patch playbook stops the roll when a client fails" grep -q 'any_errors_fatal: true' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "patch playbook undrains a failed client" grep -q 'drain disabled so the node can take work again' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "drain wait outlasts the deadline" awk '
+  /Wait for drain to complete/ { waiting = 1 }
+  waiting && /retries:/ { if (($2 + 0) < 120) exit 1; found = 1; waiting = 0 }
+  END { exit !found }
+' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "drain wait ignores LastDrain" bash -c "! grep -vE '^[[:space:]]*#' '$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml' | grep -q LastDrain"
+check "client reboot waits for a slow card" grep -q 'reboot_timeout: 1200' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "client result failure does not stop the server" awk '
+  /Record host patch result for the CI notice/ { n++ }
+  n == 1 && /failed_when: false/ { found = 1 }
+  n == 1 && /^- name: Patch Nomad Server/ { exit !found }
+  END { exit !(n >= 1 && found) }
+' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "patch result is recorded after the client is back" awk '
   /Record host patch result for the CI notice/ { if (!seen) exit 1; found = 1 }
   /Stop the roll after the client is eligible again/ { seen = 1 }

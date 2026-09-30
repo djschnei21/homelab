@@ -48,14 +48,18 @@
           command: nomad node drain -enable -deadline 15m -yes -self
           register: drain_result
 
+        # DrainStrategy is nil only after the drain finishes. LastDrain.Status
+        # is the wrong signal: a null LastDrain fails this task at once, and a
+        # previous "complete" would start apt while allocs are still moving.
+        # The deadline force-stops leftovers at 15m, so the wait has to run
+        # past that or the rescue undrains and the roll never reaches apt.
         - name: Wait for drain to complete
           command: nomad node status -self -json
           register: drain_status
-          until: >
+          until: >-
             (drain_status.stdout | from_json).SchedulingEligibility == 'ineligible' and
-            ((drain_status.stdout | from_json).DrainStrategy == None or
-             (drain_status.stdout | from_json).LastDrain.Status == 'complete')
-          retries: 90
+            (drain_status.stdout | from_json).DrainStrategy is none
+          retries: 120
           delay: 10
           changed_when: false
 
@@ -70,9 +74,11 @@
             path: /var/run/reboot-required
           register: reboot_required
 
+        # A timeout here fails the host while it is still drained. A slow card
+        # has to be allowed to come back so the undrain below can run.
         - name: Reboot if required
           reboot:
-            reboot_timeout: 600
+            reboot_timeout: 1200
             connect_timeout: 300
             test_command: uptime
           when: reboot_required.stat.exists or apt_result.changed
@@ -81,7 +87,7 @@
           command: nomad node status -self -json
           register: nomad_status
           until: nomad_status.rc == 0
-          retries: 30
+          retries: 60
           delay: 10
           changed_when: false
 
@@ -124,13 +130,15 @@
             msg: "Node {{ node_name }} has {{ (node_alloc_status.stdout | from_json).Allocations | default([]) | length }} allocations"
           failed_when: false
 
-    # A missing notice must not look like a failed upgrade. The client is
-    # already eligible again; the workflow rejects a play that wrote no line.
+    # A missing notice must not look like a failed upgrade, and it must not
+    # skip the server. The client is already eligible; the workflow rejects a
+    # play that wrote no line.
     - name: Record host patch result for the CI notice
       delegate_to: localhost
       connection: local
       become: false
       changed_when: false
+      failed_when: false
       ansible.builtin.copy:
         dest: "/tmp/homelab-patch-results/{{ inventory_hostname }}.txt"
         content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled=false\n"
@@ -168,7 +176,7 @@
 
     - name: Reboot if required
       reboot:
-        reboot_timeout: 600
+        reboot_timeout: 1200
         connect_timeout: 300
         test_command: uptime
       when:
