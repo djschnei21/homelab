@@ -26,11 +26,15 @@ jobs:
     runs-on: [self-hosted, homelab]
     env:
       NOMAD_ADDR: http://192.168.68.65:4646
+      # Not a default Actions variable. set -u would abort the requeue.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Passed as data. Interpolating the input into the script is shell on this runner.
+      RECHECK_ATTEMPT: ${{ github.event.inputs.attempt || '0' }}
     steps:
       - name: Confirm Nomad nodes are ready
         run: |
           set -euo pipefail
-          attempt="${{ github.event.inputs.attempt || '0' }}"
+          attempt="${RECHECK_ATTEMPT:-0}"
           if [[ ! "$attempt" =~ ^[0-9]+$ ]]; then
             echo "::error::bad recheck attempt"
             exit 1

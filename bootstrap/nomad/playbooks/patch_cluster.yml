@@ -18,6 +18,16 @@
       debug:
         msg: "{{ node_status.stdout_lines }}"
 
+    # copy does not create parent directories. A manual run has no workflow
+    # mkdir, and a missing directory must not be the thing that stops apt.
+    - name: Ensure the patch result directory exists
+      delegate_to: localhost
+      connection: local
+      become: false
+      ansible.builtin.file:
+        path: /tmp/homelab-patch-results
+        state: directory
+
 - name: Patch Nomad Clients
   hosts: nomad_clients
   serial: 1

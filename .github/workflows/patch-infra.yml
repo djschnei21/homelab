@@ -23,6 +23,8 @@ jobs:
     env:
       # The readiness check runs on the runner, not on a Nomad agent.
       NOMAD_ADDR: http://192.168.68.65:4646
+      # Not a default Actions variable. set -u would abort before shutdown.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
