@@ -108,6 +108,7 @@
     # what the workflow can turn into a check notice.
     - name: Record host patch result for the CI notice
       delegate_to: localhost
+      connection: local
       become: false
       changed_when: false
       ansible.builtin.copy:
@@ -170,6 +171,7 @@
 
     - name: Record host patch result for the CI notice
       delegate_to: localhost
+      connection: local
       become: false
       changed_when: false
       ansible.builtin.copy:

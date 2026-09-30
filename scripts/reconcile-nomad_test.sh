@@ -326,9 +326,11 @@ check "patch workflow publishes per-host results" grep -q 'homelab-patch-results
 check "patch playbook records apt result" grep -q 'apt_changed=' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 
 READY="$ROOT/.github/workflows/patch-ready.yml"
-check "post-reboot check follows the patch workflow" grep -q 'Patch cluster hosts' "$READY"
+check "patch workflow queues the post-reboot check" grep -q 'workflows/patch-ready.yml/dispatches' "$PATCH"
 check "post-reboot check is not on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$READY'"
-check "post-reboot check waits off the Pi" grep -q 'ubuntu-latest' "$READY"
+check "post-reboot check is dispatched" grep -q 'workflow_dispatch:' "$READY"
+check "post-reboot check stays on the homelab runner" bash -c "! grep -q 'ubuntu-latest' '$READY'"
+check "post-reboot check requeues while reboot is scheduled" grep -q 'requeued Nomad recheck attempt' "$READY"
 check "post-reboot check uses nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$READY"
 check "post-reboot check shares the cluster lock" grep -q 'group: homelab-cluster' "$READY"
 

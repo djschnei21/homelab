@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: homelab-cluster
@@ -63,6 +64,21 @@ jobs:
             line="$(tr -d '\n' <"$result")"
             echo "::notice::${line}"
           done
+          # The same job cannot see the runner host come back: that reboot is a
+          # minute after this step exits. Queue the check while this job still
+          # holds the runner, so it waits until after boot.
+          if grep -q 'reboot_scheduled=True' /tmp/homelab-patch-results/*.txt; then
+            echo "::notice::runner host reboot is scheduled; Nomad is checked again after boot"
+            code="$(curl -sS -o /tmp/homelab-dispatch-body -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/patch-ready.yml/dispatches" \
+              -d "{\"ref\":\"${GITHUB_REF_NAME}\",\"inputs\":{\"attempt\":\"0\"}}")"
+            if [[ "$code" != "204" ]]; then
+              echo "::error::recheck dispatch failed with HTTP ${code}"
+              exit 1
+            fi
+          fi
           # The Actions log store is not readable from outside the LAN.
           nomad node status -no-color | while IFS= read -r line; do
             [[ -z "$line" ]] && continue

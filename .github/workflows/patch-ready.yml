@@ -1,34 +1,28 @@
 name: Confirm hosts after patch
 
-# Patch cluster hosts reboots the Actions runner a minute after that job
-# exits, so a node check in the same job can pass and then the server goes
-# away. This wait runs on a GitHub-hosted runner, which stays up through
-# that reboot, and only then asks the homelab runner whether Nomad is back.
+# The patch job reboots the runner a minute after it exits. This check can be
+# queued before that reboot. While a shutdown is still scheduled it queues the
+# next attempt, so the attempt that runs after boot is the one that decides
+# whether Nomad is ready. A GitHub-hosted runner cannot see the Pis.
 
 on:
-  workflow_run:
-    workflows:
-      - Patch cluster hosts
-    types:
-      - completed
+  workflow_dispatch:
+    inputs:
+      attempt:
+        description: Times this check has been requeued while a reboot is still scheduled
+        required: false
+        default: "0"
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: homelab-cluster
   cancel-in-progress: false
 
 jobs:
-  wait:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Wait for the runner host to finish rebooting
-        run: sleep 180
-
   ready:
-    needs: wait
     runs-on: [self-hosted, homelab]
     env:
       NOMAD_ADDR: http://192.168.68.65:4646
@@ -36,6 +30,30 @@ jobs:
       - name: Confirm Nomad nodes are ready
         run: |
           set -euo pipefail
+          attempt="${{ github.event.inputs.attempt || '0' }}"
+          if [[ ! "$attempt" =~ ^[0-9]+$ ]]; then
+            echo "::error::bad recheck attempt"
+            exit 1
+          fi
+          if [[ -f /run/systemd/shutdown/scheduled ]]; then
+            if [[ "$attempt" -ge 8 ]]; then
+              echo "::error::runner host reboot did not finish before the Nomad recheck gave up"
+              exit 1
+            fi
+            next="$((attempt + 1))"
+            echo "::notice::runner reboot is still scheduled; requeued Nomad recheck attempt ${next}"
+            code="$(curl -sS -o /tmp/homelab-dispatch-body -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/patch-ready.yml/dispatches" \
+              -d "{\"ref\":\"${GITHUB_REF_NAME}\",\"inputs\":{\"attempt\":\"${next}\"}}")"
+            if [[ "$code" != "204" ]]; then
+              echo "::error::recheck dispatch failed with HTTP ${code}"
+              exit 1
+            fi
+            sleep 50
+            exit 0
+          fi
           nomad node status -no-color | while IFS= read -r line; do
             [[ -z "$line" ]] && continue
             echo "::notice::${line}"
