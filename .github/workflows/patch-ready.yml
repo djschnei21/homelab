@@ -1,0 +1,48 @@
+name: Confirm hosts after patch
+
+# Patch cluster hosts reboots the Actions runner a minute after that job
+# exits, so a node check in the same job can pass and then the server goes
+# away. This wait runs on a GitHub-hosted runner, which stays up through
+# that reboot, and only then asks the homelab runner whether Nomad is back.
+
+on:
+  workflow_run:
+    workflows:
+      - Patch cluster hosts
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homelab-cluster
+  cancel-in-progress: false
+
+jobs:
+  wait:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for the runner host to finish rebooting
+        run: sleep 180
+
+  ready:
+    needs: wait
+    runs-on: [self-hosted, homelab]
+    env:
+      NOMAD_ADDR: http://192.168.68.65:4646
+    steps:
+      - name: Confirm Nomad nodes are ready
+        run: |
+          set -euo pipefail
+          nomad node status -no-color | while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            echo "::notice::${line}"
+          done
+          if nomad node status -no-color | awk 'NR>1 && $NF != "ready" { bad = 1 } END { exit bad+0 }'; then
+            echo "::notice::all nomad nodes ready after patch"
+          else
+            echo "::error::a nomad node is not ready after patch"
+            exit 1
+          fi

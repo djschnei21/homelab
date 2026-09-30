@@ -104,6 +104,16 @@
           debug:
             msg: "Node {{ node_name }} has {{ (node_alloc_status.stdout | from_json).Allocations | default([]) | length }} allocations"
 
+    # The Actions log blob is not readable off the LAN. One line per host is
+    # what the workflow can turn into a check notice.
+    - name: Record host patch result for the CI notice
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      ansible.builtin.copy:
+        dest: "/tmp/homelab-patch-results/{{ inventory_hostname }}.txt"
+        content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled=false\n"
+
 - name: Patch Nomad Server
   hosts: nomad_servers
   become: true
@@ -139,6 +149,7 @@
       when:
         - reboot_required.stat.exists or apt_result.changed
         - inventory_hostname == (patch_runner_host | default(''))
+      register: scheduled_reboot
 
     - name: Wait for Nomad server to be ready
       command: nomad server members
@@ -156,3 +167,11 @@
     - name: Display final cluster status
       debug:
         msg: "{{ final_node_status.stdout_lines }}"
+
+    - name: Record host patch result for the CI notice
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      ansible.builtin.copy:
+        dest: "/tmp/homelab-patch-results/{{ inventory_hostname }}.txt"
+        content: "host={{ inventory_hostname }} apt_changed={{ apt_result.changed | bool }} reboot_required={{ reboot_required.stat.exists | bool }} reboot_scheduled={{ scheduled_reboot is changed }}\n"

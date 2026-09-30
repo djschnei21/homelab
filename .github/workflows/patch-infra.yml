@@ -50,7 +50,19 @@ jobs:
             fi
           done
           cd bootstrap/nomad
+          mkdir -p /tmp/homelab-patch-results
+          find /tmp/homelab-patch-results -mindepth 1 -delete
           ansible-playbook -i ../inventory.yml -e "patch_runner_host=${runner}" playbooks/patch_cluster.yml
+          # One line per host. The Actions log store is not readable from outside the LAN.
+          for host in pinode1 pinode2 pinode3 pinode4; do
+            result="/tmp/homelab-patch-results/${host}.txt"
+            if [[ ! -f "$result" ]]; then
+              echo "::error::no patch result for ${host}"
+              exit 1
+            fi
+            line="$(tr -d '\n' <"$result")"
+            echo "::notice::${line}"
+          done
           # The Actions log store is not readable from outside the LAN.
           nomad node status -no-color | while IFS= read -r line; do
             [[ -z "$line" ]] && continue

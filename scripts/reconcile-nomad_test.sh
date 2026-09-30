@@ -322,6 +322,15 @@ check "patch workflow does not run on push" bash -c "! grep -Eq '^[[:space:]]*pu
 check "patch workflow reports node status" grep -q 'nomad node status -no-color' "$PATCH"
 check "patch workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$PATCH"
 check "patch workflow fails if a node is not ready" grep -q 'a nomad node is not ready after patch' "$PATCH"
+check "patch workflow publishes per-host results" grep -q 'homelab-patch-results' "$PATCH"
+check "patch playbook records apt result" grep -q 'apt_changed=' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+
+READY="$ROOT/.github/workflows/patch-ready.yml"
+check "post-reboot check follows the patch workflow" grep -q 'Patch cluster hosts' "$READY"
+check "post-reboot check is not on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$READY'"
+check "post-reboot check waits off the Pi" grep -q 'ubuntu-latest' "$READY"
+check "post-reboot check uses nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$READY"
+check "post-reboot check shares the cluster lock" grep -q 'group: homelab-cluster' "$READY"
 
 if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
   echo "FAIL script references a forbidden command" >&2
