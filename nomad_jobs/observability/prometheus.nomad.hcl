@@ -3,7 +3,7 @@ job "prometheus" {
   namespace   = "default"
 
   meta {
-    version = "2026-02-01-v10"
+    version = "2026-08-20-v2"
   }
 
   group "prometheus" {
@@ -27,7 +27,7 @@ job "prometheus" {
       driver = "docker"
 
       config {
-        image = "prom/prometheus:v2.48.0"
+        image = "prom/prometheus:v3.14.0"
 
         args = [
           "--config.file=/etc/prometheus/prometheus.yml",
@@ -61,18 +61,18 @@ scrape_configs:
     params:
       format: ["prometheus"]
     static_configs:
-      - targets: ["192.168.68.51:4646"]
+      - targets: ["192.168.68.65:4646"]
         labels:
-          node: "pinode2"
+          node: "pinode1"
 
   - job_name: "nomad-clients"
     metrics_path: "/v1/metrics"
     params:
       format: ["prometheus"]
     static_configs:
-      - targets: ["192.168.68.65:4646"]
+      - targets: ["192.168.68.51:4646"]
         labels:
-          node: "pinode1"
+          node: "pinode2"
       - targets: ["192.168.68.64:4646"]
         labels:
           node: "pinode3"
@@ -82,9 +82,9 @@ scrape_configs:
 
   - job_name: "node-exporter"
     static_configs:
-      - targets: ["192.168.68.65:9100"]
+      - targets: ["192.168.68.51:9100"]
         labels:
-          node: "pinode1"
+          node: "pinode2"
       - targets: ["192.168.68.64:9100"]
         labels:
           node: "pinode3"
@@ -136,7 +136,7 @@ EOF
       driver = "docker"
 
       config {
-        image = "grafana/grafana:10.2.0"
+        image = "grafana/grafana:13.2.0"
         ports = ["http"]
 
         volumes = [
@@ -186,7 +186,7 @@ EOF
 
       resources {
         cpu    = 300
-        memory = 256
+        memory = 512
       }
     }
 
