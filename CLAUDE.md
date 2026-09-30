@@ -46,7 +46,7 @@ export NOMAD_ADDR=http://pinode1.local:4646
 
 **Deploy a Nomad job:**
 ```bash
-nomad job run -namespace=bitcoin nomad_jobs/bitcoin/bitcoin.nomad.hcl
+nomad job run -namespace=bitcoin nomad_jobs/bitcoin/bitcoin-stack.nomad.hcl
 ```
 
 **Check job status:**
@@ -61,12 +61,12 @@ nomad alloc logs <alloc-id>
 
 **Plan changes before deploy:**
 ```bash
-nomad job plan -namespace=bitcoin nomad_jobs/bitcoin/bitcoin.nomad.hcl
+nomad job plan -namespace=bitcoin nomad_jobs/bitcoin/bitcoin-stack.nomad.hcl
 ```
 
 **Restart a job (re-pulls image):**
 ```bash
-nomad job restart -namespace=bitcoin bitcoin
+nomad job restart -namespace=bitcoin bitcoin-stack
 ```
 
 **Bootstrap cluster (Ansible):**
