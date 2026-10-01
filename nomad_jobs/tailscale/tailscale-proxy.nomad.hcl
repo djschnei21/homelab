@@ -50,13 +50,17 @@ job "tailscale-proxy" {
 
       template {
         data        = <<EOF
-import json, os, time, urllib.request
+import http.client, json, os, re, ssl, threading, time, urllib.request
 
 API = os.environ.get("NOMAD_API", "http://192.168.68.65:4646")
 TOKEN = os.environ.get("NOMAD_TOKEN", "")
 TAILNET = os.environ.get("TS_TAILNET", "whale-sidewinder.ts.net")
 CADDY = "/alloc/Caddyfile"
 ELECTRS = "/alloc/electrs.env"
+# electrs-gw's tailscaled HTTP proxy is this group's only way into the tailnet.
+WARM_PROXY = ("127.0.0.1", 1055)
+WARM_SECONDS = 600
+WARM_RETRY = 10
 
 def svc(name, ns="default"):
     url = f"{API}/v1/service/{name}?namespace={ns}"
@@ -123,21 +127,58 @@ def render():
     electrs_env = f"ELECTRS_HOST={electrs[0]}\nELECTRS_PORT={electrs[1]}\n"
     return caddy, electrs_env
 
-last = None
-while True:
-    try:
-        caddy, electrs_env = render()
-        blob = (caddy, electrs_env)
-        if blob != last:
-            with open(CADDY, "w") as f:
-                f.write(caddy)
-            with open(ELECTRS, "w") as f:
-                f.write(electrs_env)
-            last = blob
-            print("wrote upstreams", flush=True)
-    except Exception as e:
-        print("render error:", e, flush=True)
-    time.sleep(10)
+# Caddy fetches a site's cert during the first TLS handshake, which can outlast
+# the first real visitor. A verified handshake per site gets it in early.
+def warm(name, deadline):
+    host = f"{name}.{TAILNET}"
+    ctx = ssl.create_default_context()
+    err = None
+    while (left := deadline - time.monotonic()) > 0:
+        conn = http.client.HTTPSConnection(*WARM_PROXY, timeout=min(90, left), context=ctx)
+        conn.set_tunnel(host, 443)
+        try:
+            conn.connect()
+            print(f"warmed {name}", flush=True)
+            return
+        except Exception as e:
+            err = e
+        finally:
+            conn.close()
+        time.sleep(WARM_RETRY)
+    print(f"warm failed {name}: {err}", flush=True)
+
+def start_warm(caddy):
+    deadline = time.monotonic() + WARM_SECONDS
+    threads = []
+    for name in re.findall(r"bind tailscale/(\S+)", caddy):
+        t = threading.Thread(target=warm, args=(name, deadline), daemon=True)
+        t.start()
+        threads.append(t)
+    return threads
+
+def main():
+    last = None
+    warming = False
+    while True:
+        try:
+            caddy, electrs_env = render()
+            blob = (caddy, electrs_env)
+            if blob != last:
+                with open(CADDY, "w") as f:
+                    f.write(caddy)
+                with open(ELECTRS, "w") as f:
+                    f.write(electrs_env)
+                last = blob
+                print("wrote upstreams", flush=True)
+            if not warming:
+                start_warm(caddy)
+                warming = True
+        except Exception as e:
+            print("render error:", e, flush=True)
+        time.sleep(10)
+
+if __name__ == "__main__":
+    main()
 EOF
         destination = "local/render.py"
         change_mode = "restart"
@@ -207,24 +248,18 @@ EOF
         args       = ["exec /bin/sh /local/electrs-gw.sh"]
       }
 
-      env {
-        TS_TAILNET = "whale-sidewinder.ts.net"
-      }
-
       volume_mount {
         volume      = "tailscale-proxy-state"
         destination = "/data"
         read_only   = false
       }
 
+      # Read by tailscale up as file:, so the key stays out of argv and the task env.
       template {
         data        = <<EOF
-{{ with nomadVar "nomad/jobs/tailscale-proxy/proxy/electrs-gw" }}
-TS_AUTHKEY={{ .TS_AUTHKEY }}
-{{ end }}
+{{ with nomadVar "nomad/jobs/tailscale-proxy/proxy/electrs-gw" }}{{ .TS_AUTHKEY }}{{ end }}
 EOF
-        destination = "${NOMAD_SECRETS_DIR}/ts.env"
-        env         = true
+        destination = "${NOMAD_SECRETS_DIR}/ts_authkey"
         change_mode = "restart"
       }
 
@@ -232,9 +267,10 @@ EOF
         data        = <<EOF
 set -e
 mkdir -p /data/electrs-ts
+# render warms caddy's certs through the HTTP proxy on 1055.
 tailscaled --tun=userspace-networking --statedir=/data/electrs-ts --socket=/tmp/tailscaled.sock --outbound-http-proxy-listen=127.0.0.1:1055 --socks5-server=127.0.0.1:1055 &
 sleep 2
-tailscale --socket=/tmp/tailscaled.sock up --auth-key="$TS_AUTHKEY" --hostname=electrs --advertise-tags=tag:homelab --accept-dns=false
+tailscale --socket=/tmp/tailscaled.sock up --auth-key="file:$NOMAD_SECRETS_DIR/ts_authkey" --hostname=electrs --advertise-tags=tag:homelab --accept-dns=false
 i=0
 while [ "$i" -lt 60 ]; do
   if tailscale --socket=/tmp/tailscaled.sock ip -4 >/dev/null 2>&1; then
@@ -242,21 +278,6 @@ while [ "$i" -lt 60 ]; do
   fi
   sleep 2
   i=$((i + 1))
-done
-warm() {
-  n=0
-  while [ "$n" -lt 8 ]; do
-    if https_proxy=http://127.0.0.1:1055 wget -q -O /dev/null -T 90 "https://$1.$TS_TAILNET/"; then
-      echo "warmed $1"
-      return 0
-    fi
-    n=$((n + 1))
-    sleep 5
-  done
-  echo "warm failed $1"
-}
-for h in grafana prometheus mempool alby; do
-  warm "$h" &
 done
 # electrs.env is data. Sourcing it would run whatever the file contains.
 electrs_target() {
