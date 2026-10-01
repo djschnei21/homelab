@@ -146,7 +146,7 @@ EOF
       driver = "docker"
 
       config {
-        image      = "ghcr.io/tailscale/caddy-tailscale:main"
+        image      = "ghcr.io/tailscale/caddy-tailscale@sha256:d9607d404af12e76df51c5593412bf2a2185126cd2c63b48c6917881166cd3d8"
         entrypoint = ["/bin/sh", "-c"]
         args       = ["while [ ! -s /alloc/Caddyfile ]; do echo waiting for Caddyfile; sleep 2; done; exec caddy run --watch --config /alloc/Caddyfile --adapter caddyfile"]
         ports      = ["health"]
@@ -229,8 +229,9 @@ electrs_target() {
   _port=""
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-      ELECTRS_HOST=*) _host="${line#ELECTRS_HOST=}" ;;
-      ELECTRS_PORT=*) _port="${line#ELECTRS_PORT=}" ;;
+      # Doubled dollar is HCL escaping. The shell sees one dollar.
+      ELECTRS_HOST=*) _host="$${line#ELECTRS_HOST=}" ;;
+      ELECTRS_PORT=*) _port="$${line#ELECTRS_PORT=}" ;;
     esac
   done < /alloc/electrs.env
   case "$_host" in
