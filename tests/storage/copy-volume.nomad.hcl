@@ -33,6 +33,7 @@ variable "checksum" {
   description = "Add --checksum to the verify dry-run."
 }
 
+# Chain, electrs, and tailscale register this mode. Prometheus, Grafana, and Alby are single-node-writer only.
 variable "source_access_mode" {
   type        = string
   default     = "multi-node-single-writer"

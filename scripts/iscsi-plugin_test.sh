@@ -103,6 +103,7 @@ check "copy job can exclude the stale chain subtree" \
 check "copy job joins excludes with commas" \
   grep -q 'join(",", var.extra_excludes)' "$ROOT/tests/storage/copy-volume.nomad.hcl"
 check "readme lists the cutover owners" bash -c 'grep -q "65534:65534" "$1" && grep -q "472:0" "$1" && grep -q "chown=0:0" "$1" && grep -q "3001:3001" "$1" && grep -q "/bitcoin-data" "$1"' bash "$ROOT/tests/storage/README.md"
+check "readme overrides access mode for the single-writer sources" bash -c 'test "$(grep -c "source_access_mode=single-node-writer" "$1")" = 3 && grep -q "scaled to 0" "$1"' bash "$ROOT/tests/storage/README.md"
 check "storage readme says why these jobs are not reconciled" \
   grep -q 'nomad_jobs' "$ROOT/tests/storage/README.md"
 

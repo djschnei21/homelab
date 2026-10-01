@@ -8,7 +8,7 @@ Run them by hand from the repo root, with `NOMAD_ADDR` and a storage-admin token
 
 `holder.nomad.hcl` chowns the mount root to `65534:65534` in a non-sidecar prestart, then a `65534` task writes `/data/marker` once and appends `/data/visits`. A fresh ext4 root is `root:root` `0755`, so the writer cannot create the marker until that chown. `-var shutdown_delay_seconds=180` sleeps in the SIGTERM trap. The trap is armed around `sleep 3600 & wait $!`, so the signal is not stuck behind an hour of foreground sleep. `kill_timeout` is that delay plus 15 seconds, which needs the client `max_kill_timeout` from the client-prep PR before a 3 minute drain proof. `-var fence=true` adds `disconnect { lost_after = "12h", replace = false, reconcile = "keep_original" }`. `-var target_node=pinode3` pins the alloc. Do not drain a client to move it.
 
-`copy-volume.nomad.hcl` claims `source_volume` read-only (`multi-node-single-writer` by default, so pass 1 can run beside the live writer) and `dest_volume` read-write. It runs:
+`copy-volume.nomad.hcl` claims `source_volume` read-only and `dest_volume` read-write. The default source access mode is `multi-node-single-writer`, which chain, electrs, and tailscale register, so those copies can run beside the live writer and again after the stop. Prometheus, Grafana, and Alby only register `single-node-writer`, so their copies pass that mode and run once, after the writer group is scaled to 0. It runs:
 
 ```
 rsync -aH --numeric-ids --delete --exclude=/lost+found --chown=<uid>:<gid>
@@ -19,24 +19,28 @@ from `instrumentisto/rsync-ssh:alpine3.23-r3`. `-var verify=true` is `--dry-run 
 Owners and the commands for each cutover, from the repo root:
 
 ```bash
-# Prometheus. TSDB at data/, not the volume root.
+# Prometheus. Single pass, after the writer group is scaled to 0.
+# prometheus-data is single-node-writer only. TSDB at data/, not the volume root.
 nomad job run -namespace=default \
   -var namespace=default \
   -var source_volume=prometheus-data \
+  -var source_access_mode=single-node-writer \
   -var dest_volume=prometheus-tsdb \
   -var chown=65534:65534 \
   -var dest_subdir=data \
   tests/storage/copy-volume.nomad.hcl
 
-# Grafana
+# Grafana. Single pass, after the writer group is scaled to 0.
+# grafana-data is single-node-writer only.
 nomad job run -namespace=default \
   -var namespace=default \
   -var source_volume=grafana-data \
+  -var source_access_mode=single-node-writer \
   -var dest_volume=grafana-db \
   -var chown=472:0 \
   tests/storage/copy-volume.nomad.hcl
 
-# Tailscale
+# Tailscale. tailscale-proxy-state is multi-node-single-writer, so the default stands.
 nomad job run -namespace=default \
   -var namespace=default \
   -var source_volume=tailscale-proxy-state \
@@ -44,15 +48,17 @@ nomad job run -namespace=default \
   -var chown=0:0 \
   tests/storage/copy-volume.nomad.hcl
 
-# Alby
+# Alby. Single pass, after the writer group is scaled to 0.
+# albyhub-data is single-node-writer only.
 nomad job run -namespace=bitcoin \
   -var namespace=bitcoin \
   -var source_volume=albyhub-data \
+  -var source_access_mode=single-node-writer \
   -var dest_volume=albyhub-work \
   -var chown=0:0 \
   tests/storage/copy-volume.nomad.hcl
 
-# Electrs index
+# Electrs index. Default multi-node-single-writer: pass 1 beside the live writer, pass 2 after the stop.
 nomad job run -namespace=bitcoin \
   -var namespace=bitcoin \
   -var source_volume=electrs-data \
@@ -60,7 +66,8 @@ nomad job run -namespace=bitcoin \
   -var chown=3001:3001 \
   tests/storage/copy-volume.nomad.hcl
 
-# Chain. Skip the stale bitcoin-data directory at the source root.
+# Chain. Same default: pass 1 beside the live writer, pass 2 after the stop.
+# Skip the stale bitcoin-data directory at the source root.
 nomad job run -namespace=bitcoin \
   -var namespace=bitcoin \
   -var source_volume=bitcoin-data \
