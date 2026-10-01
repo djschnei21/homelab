@@ -17,6 +17,11 @@ job "bitcoin-stack" {
       unlimited      = false
     }
 
+    # Nomad requires the progress deadline to exceed bitcoind's 15m kill_timeout.
+    update {
+      progress_deadline = "20m"
+    }
+
     volume "bitcoin-data" {
       type            = "csi"
       read_only       = false
