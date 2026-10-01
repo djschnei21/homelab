@@ -137,6 +137,8 @@ while True:
 EOF
         destination = "local/render.py"
         change_mode = "restart"
+        left_delimiter  = "[["
+        right_delimiter = "]]"
       }
 
       resources {
