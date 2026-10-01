@@ -23,6 +23,8 @@ jobs:
     env:
       # The readiness check runs on the runner, not on a Nomad agent.
       NOMAD_ADDR: http://192.168.68.65:4646
+      # The CLI appends Web UI hint lines to table output.
+      NOMAD_CLI_SHOW_HINTS: "0"
       # Not a default Actions variable. set -u would abort before shutdown.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -98,27 +100,21 @@ jobs:
           done
           # The Actions log store is not readable from outside the LAN.
           # A hung agent must fail this step, not run until the reboot kills it.
-          # Three clients. A header-only reply is not a healthy cluster.
+          # Three clients. An empty node list is not a healthy cluster.
+          # When the runner is not the server host, the playbook rebooted the
+          # server in-band and this is the post-boot check, so it waits for
+          # clients to rejoin the same way patch-ready does.
           # Reboot the runner only after this passes and the follow-up is queued,
           # so a down client does not lose the server on top of the failed roll.
-          status_out="$(mktemp)"
-          if timeout 15 nomad node status -no-color >"$status_out" 2>&1 \
-            && awk 'NR>1 && NF { n++; if ($NF != "ready") bad = 1 } END { exit !(n >= 3 && !bad) }' "$status_out"; then
-            nodes_ready=1
-          else
-            nodes_ready=0
-          fi
-          while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            echo "::notice::${line}"
-          done <"$status_out"
-          rm -f "$status_out"
-          if [[ "$nodes_ready" -eq 1 ]]; then
+          if "${GITHUB_WORKSPACE}/scripts/nomad-nodes-ready.py" --min 3 --attempts 18 --delay 10 --timeout 15; then
             echo "::notice::all nomad nodes ready"
           else
             echo "::error::a nomad node is not ready after patch"
             exit 1
           fi
+          # Only the server play sets this, and only when it deferred the
+          # runner's own reboot. A runner that is not a cluster host never
+          # reboots here and needs no follow-up.
           if grep -q 'reboot_scheduled=True' /tmp/homelab-patch-results/*.txt; then
             echo "::notice::runner host reboot is scheduled; Nomad is checked again after boot"
             code="$(curl -sS --max-time 30 -o /tmp/homelab-dispatch-body -w '%{http_code}' -X POST \

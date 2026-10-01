@@ -1,0 +1,98 @@
+---
+# Installs the OpenPGP key at apt_keyring_url, dearmored, as apt_keyring_path.
+# Vendors rotate these keys, so this runs every time and copy replaces the
+# keyring only when the dearmored key differs; a creates: guard pins the old
+# key until apt update fails. A download that holds no public key, or a primary
+# key missing from apt_keyring_fingerprints, is refused and the keyring is left
+# alone. Staging runs in check mode too, so --check reports a pending rotation.
+# Needs gpg and ca-certificates (common installs both). Shared by common,
+# nomad_client, and playbooks/patch_cluster.yml.
+- name: Refresh apt keyring {{ apt_keyring_path }}
+  block:
+    - name: Create a staging directory for {{ apt_keyring_path }}
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: apt-key
+      register: apt_keyring_dir
+      check_mode: false
+      changed_when: false
+
+    - name: Download {{ apt_keyring_url }}
+      ansible.builtin.get_url:
+        url: "{{ apt_keyring_url }}"
+        dest: "{{ apt_keyring_dir.path }}/key.asc"
+        mode: "0644"
+      check_mode: false
+      changed_when: false
+
+    - name: Dearmor {{ apt_keyring_url }}
+      ansible.builtin.command:
+        argv:
+          - gpg
+          - --batch
+          - --dearmor
+          - --output
+          - "{{ apt_keyring_dir.path }}/key.gpg"
+          - "{{ apt_keyring_dir.path }}/key.asc"
+      check_mode: false
+      changed_when: false
+
+    # gpg exits 0 for data that dearmors without a key in it (a detached
+    # signature, say), so the exit code alone does not prove a key.
+    - name: Check {{ apt_keyring_url }} holds a public key
+      ansible.builtin.command:
+        argv:
+          - gpg
+          - --batch
+          - --show-keys
+          - --with-colons
+          - "{{ apt_keyring_dir.path }}/key.gpg"
+      register: apt_keyring_info
+      check_mode: false
+      changed_when: false
+      failed_when: >-
+        apt_keyring_info.rc != 0 or
+        apt_keyring_info.stdout_lines | select('match', 'pub:') | list
+        | length == 0
+
+    # The keyring is the trust root for every apt upgrade on the host, so TLS
+    # to the vendor is not enough to accept a new key. A rotation fails here,
+    # before any drain, until its fingerprint is checked out of band and added.
+    - name: Check {{ apt_keyring_url }} holds only allowed keys
+      ansible.builtin.assert:
+        that:
+          - apt_keyring_primary | length > 0
+          - apt_keyring_primary | difference(apt_keyring_allowed) | length == 0
+        fail_msg: >-
+          {{ apt_keyring_url }} serves primary key(s)
+          {{ apt_keyring_primary | join(', ') }}; allowed:
+          {{ apt_keyring_allowed | join(', ') }}. Verify a rotated key's
+          fingerprint out of band, then add it to the role defaults.
+        quiet: true
+      vars:
+        apt_keyring_allowed: >-
+          {{ apt_keyring_fingerprints | map('upper') | map('replace', ' ', '')
+             | list }}
+        # gpg prints each key's fpr: record right after its pub: or sub: line.
+        apt_keyring_primary: >-
+          {{ apt_keyring_info.stdout_lines[:-1]
+             | zip(apt_keyring_info.stdout_lines[1:])
+             | selectattr('0', 'match', 'pub:')
+             | selectattr('1', 'match', 'fpr:')
+             | map(attribute='1') | map('split', ':') | map(attribute='9')
+             | list }}
+
+    - name: Install {{ apt_keyring_path }}
+      ansible.builtin.copy:
+        src: "{{ apt_keyring_dir.path }}/key.gpg"
+        dest: "{{ apt_keyring_path }}"
+        remote_src: true
+        mode: "0644"
+  always:
+    - name: Remove the staging directory for {{ apt_keyring_path }}
+      ansible.builtin.file:
+        path: "{{ apt_keyring_dir.path }}"
+        state: absent
+      when: apt_keyring_dir.path is defined
+      check_mode: false
+      changed_when: false
