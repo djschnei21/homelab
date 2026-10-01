@@ -158,9 +158,10 @@ EOF
         read_only   = false
       }
 
+      # Task-level path. A job or group path would let render read the key.
       template {
         data        = <<EOF
-{{ with nomadVar "nomad/jobs/tailscale-proxy" }}
+{{ with nomadVar "nomad/jobs/tailscale-proxy/proxy/caddy" }}
 TS_AUTHKEY={{ .TS_AUTHKEY }}
 {{ end }}
 EOF
@@ -209,7 +210,7 @@ EOF
 
       template {
         data        = <<EOF
-{{ with nomadVar "nomad/jobs/tailscale-proxy" }}
+{{ with nomadVar "nomad/jobs/tailscale-proxy/proxy/electrs-gw" }}
 TS_AUTHKEY={{ .TS_AUTHKEY }}
 {{ end }}
 EOF
