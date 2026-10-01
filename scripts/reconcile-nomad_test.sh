@@ -699,6 +699,29 @@ check "HashiCorp repo is signed by the refreshed keyring" grep -q 'signed_by: "{
 check "nomad_client refreshes the Docker key before adding its repo" \
   keyring_refreshed_before "$CLIENT_ROLE" "" docker_apt_keyring "Add Docker repository"
 check "Docker repo is signed by the refreshed keyring" grep -q 'signed_by: "{{ docker_apt_keyring }}"' "$CLIENT_ROLE"
+check "patch refreshes the HashiCorp key on clients before the drain" \
+  keyring_refreshed_before "$PATCH_PLAY" "Patch Nomad Clients" hashicorp_apt_keyring "Enable drain with deadline"
+check "patch refreshes the Docker key on clients before the drain" \
+  keyring_refreshed_before "$PATCH_PLAY" "Patch Nomad Clients" docker_apt_keyring "Enable drain with deadline"
+check "patch refreshes the HashiCorp key on the server before apt update" \
+  keyring_refreshed_before "$PATCH_PLAY" "Patch Nomad Server" hashicorp_apt_keyring "Update package cache and upgrade packages"
+
+play_loads_vars_file() {
+  awk -v play="- name: $2" -v vars_file="- $3" '
+    /^- name:/ { in_play = (index($0, play) == 1); in_vars = 0; next }
+    in_play && /^  vars_files:/ { in_vars = 1; next }
+    in_vars && /^  [^ ]/ { in_vars = 0 }
+    in_vars && index($0, vars_file) { found = 1 }
+    END { exit !found }
+  ' "$1"
+}
+check "client patch play loads the HashiCorp key defaults" \
+  play_loads_vars_file "$PATCH_PLAY" "Patch Nomad Clients" ../roles/common/defaults/main.yml
+check "client patch play loads the Docker key defaults" \
+  play_loads_vars_file "$PATCH_PLAY" "Patch Nomad Clients" ../roles/nomad_client/defaults/main.yml
+check "server patch play loads the HashiCorp key defaults" \
+  play_loads_vars_file "$PATCH_PLAY" "Patch Nomad Server" ../roles/common/defaults/main.yml
+
 # Packages an apt task in a role file leaves in the given state.
 role_packages() {
   awk -v want="$2" '

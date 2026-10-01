@@ -42,6 +42,9 @@
   any_errors_fatal: true
   environment:
     NOMAD_TOKEN: "{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}"
+  vars_files:
+    - ../roles/common/defaults/main.yml
+    - ../roles/nomad_client/defaults/main.yml
   tasks:
     - name: Get node ID
       command: nomad node status -self -json
@@ -56,6 +59,21 @@
     - name: Display node being patched
       debug:
         msg: "Patching node {{ node_name }} ({{ node_id }})"
+
+    # apt update trusts these keyrings, and a vendor key rotation must not
+    # fail it. Refreshed before the drain so a bad download stops the roll
+    # while the node still has its allocations.
+    - name: Refresh the HashiCorp apt signing key
+      ansible.builtin.import_tasks: ../roles/common/tasks/apt_keyring.yml
+      vars:
+        apt_keyring_url: "{{ hashicorp_apt_key_url }}"
+        apt_keyring_path: "{{ hashicorp_apt_keyring }}"
+
+    - name: Refresh the Docker apt signing key
+      ansible.builtin.import_tasks: ../roles/common/tasks/apt_keyring.yml
+      vars:
+        apt_keyring_url: "{{ docker_apt_key_url }}"
+        apt_keyring_path: "{{ docker_apt_keyring }}"
 
     # A failure after drain used to leave the client ineligible. Put it back
     # into service, then fail the host so the roll stops.
@@ -165,10 +183,20 @@
   become: true
   environment:
     NOMAD_TOKEN: "{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}"
+  vars_files:
+    - ../roles/common/defaults/main.yml
   tasks:
     - name: Display server being patched
       debug:
         msg: "Patching Nomad server {{ inventory_hostname }}"
+
+    # apt update trusts this keyring, and a HashiCorp key rotation must not
+    # fail it.
+    - name: Refresh the HashiCorp apt signing key
+      ansible.builtin.import_tasks: ../roles/common/tasks/apt_keyring.yml
+      vars:
+        apt_keyring_url: "{{ hashicorp_apt_key_url }}"
+        apt_keyring_path: "{{ hashicorp_apt_keyring }}"
 
     - name: Update package cache and upgrade packages
       apt:
