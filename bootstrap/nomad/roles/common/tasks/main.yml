@@ -10,74 +10,11 @@
       - python3-debian
     state: present
 
-# HashiCorp rotates this key. Fetch it every run and let copy replace the
-# keyring only when the dearmored key differs; a creates: guard pins the old
-# key and apt update fails after a rotation. Staging runs in check mode too,
-# so --check reports a pending rotation.
 - name: Refresh the HashiCorp apt signing key
-  block:
-    - name: Create a staging directory for the HashiCorp key
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: hashicorp-key
-      register: hashicorp_key_dir
-      check_mode: false
-      changed_when: false
-
-    - name: Download the HashiCorp apt signing key
-      ansible.builtin.get_url:
-        url: https://apt.releases.hashicorp.com/gpg
-        dest: "{{ hashicorp_key_dir.path }}/hashicorp.asc"
-        mode: "0644"
-      check_mode: false
-      changed_when: false
-
-    - name: Dearmor the HashiCorp apt signing key
-      ansible.builtin.command:
-        argv:
-          - gpg
-          - --batch
-          - --dearmor
-          - --output
-          - "{{ hashicorp_key_dir.path }}/hashicorp.gpg"
-          - "{{ hashicorp_key_dir.path }}/hashicorp.asc"
-      check_mode: false
-      changed_when: false
-
-    # Anything that dearmors without a public key in it (a detached signature,
-    # say) must not replace the keyring apt trusts. gpg exits 0 for those.
-    - name: Check the HashiCorp download holds a public key
-      ansible.builtin.command:
-        argv:
-          - gpg
-          - --batch
-          - --show-keys
-          - --with-colons
-          - "{{ hashicorp_key_dir.path }}/hashicorp.gpg"
-      register: hashicorp_key_info
-      check_mode: false
-      changed_when: false
-      failed_when: >-
-        hashicorp_key_info.rc != 0 or
-        hashicorp_key_info.stdout_lines | select('match', 'pub:') | list
-        | length == 0
-
-    - name: Install the HashiCorp apt keyring
-      ansible.builtin.copy:
-        src: "{{ hashicorp_key_dir.path }}/hashicorp.gpg"
-        dest: /usr/share/keyrings/hashicorp-archive-keyring.gpg
-        remote_src: true
-        owner: root
-        group: root
-        mode: "0644"
-  always:
-    - name: Remove the HashiCorp key staging directory
-      ansible.builtin.file:
-        path: "{{ hashicorp_key_dir.path }}"
-        state: absent
-      when: hashicorp_key_dir.path is defined
-      check_mode: false
-      changed_when: false
+  ansible.builtin.import_tasks: apt_keyring.yml
+  vars:
+    apt_keyring_url: "{{ hashicorp_apt_key_url }}"
+    apt_keyring_path: "{{ hashicorp_apt_keyring }}"
 
 - name: Remove legacy HashiCorp apt repository list
   ansible.builtin.file:
@@ -97,7 +34,7 @@
       - main
     architectures:
       - arm64
-    signed_by: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    signed_by: "{{ hashicorp_apt_keyring }}"
     install_python_debian: true
     state: present
 

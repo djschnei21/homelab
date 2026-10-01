@@ -1,0 +1,70 @@
+---
+# Installs the OpenPGP key at apt_keyring_url, dearmored, as apt_keyring_path.
+# Vendors rotate these keys, so this runs every time and copy replaces the
+# keyring only when the dearmored key differs; a creates: guard pins the old
+# key until apt update fails. A download that holds no public key is refused
+# and the keyring is left alone. Staging runs in check mode too, so --check
+# reports a pending rotation. Needs gpg and ca-certificates (common installs
+# both). Shared by common, nomad_client, and playbooks/patch_cluster.yml.
+- name: Refresh apt keyring {{ apt_keyring_path }}
+  block:
+    - name: Create a staging directory for {{ apt_keyring_path }}
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: apt-key
+      register: apt_keyring_dir
+      check_mode: false
+      changed_when: false
+
+    - name: Download {{ apt_keyring_url }}
+      ansible.builtin.get_url:
+        url: "{{ apt_keyring_url }}"
+        dest: "{{ apt_keyring_dir.path }}/key.asc"
+        mode: "0644"
+      check_mode: false
+      changed_when: false
+
+    - name: Dearmor {{ apt_keyring_url }}
+      ansible.builtin.command:
+        argv:
+          - gpg
+          - --batch
+          - --dearmor
+          - --output
+          - "{{ apt_keyring_dir.path }}/key.gpg"
+          - "{{ apt_keyring_dir.path }}/key.asc"
+      check_mode: false
+      changed_when: false
+
+    # gpg exits 0 for data that dearmors without a key in it (a detached
+    # signature, say), so the exit code alone does not prove a key.
+    - name: Check {{ apt_keyring_url }} holds a public key
+      ansible.builtin.command:
+        argv:
+          - gpg
+          - --batch
+          - --show-keys
+          - --with-colons
+          - "{{ apt_keyring_dir.path }}/key.gpg"
+      register: apt_keyring_info
+      check_mode: false
+      changed_when: false
+      failed_when: >-
+        apt_keyring_info.rc != 0 or
+        apt_keyring_info.stdout_lines | select('match', 'pub:') | list
+        | length == 0
+
+    - name: Install {{ apt_keyring_path }}
+      ansible.builtin.copy:
+        src: "{{ apt_keyring_dir.path }}/key.gpg"
+        dest: "{{ apt_keyring_path }}"
+        remote_src: true
+        mode: "0644"
+  always:
+    - name: Remove the staging directory for {{ apt_keyring_path }}
+      ansible.builtin.file:
+        path: "{{ apt_keyring_dir.path }}"
+        state: absent
+      when: apt_keyring_dir.path is defined
+      check_mode: false
+      changed_when: false

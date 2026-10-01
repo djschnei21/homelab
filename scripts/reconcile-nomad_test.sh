@@ -636,25 +636,69 @@ check "client introduction is left at its default" bash -c "! grep -rq client_in
 
 ROLES="$ROOT/bootstrap/nomad/roles"
 COMMON="$ROLES/common/tasks/main.yml"
-check "HashiCorp key has no creates guard" bash -c "! grep -v '^[[:space:]]*#' '$COMMON' | grep -q 'creates:'"
-check "HashiCorp key is downloaded on every run" awk '
+CLIENT_ROLE="$ROLES/nomad_client/tasks/main.yml"
+KEYRING_TASKS="$ROLES/common/tasks/apt_keyring.yml"
+PATCH_PLAY="$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "no apt key is guarded by creates" bash -c \
+  "! grep -rh --include='*.yml' -v '^[[:space:]]*#' '$ROLES' '$ROOT/bootstrap/nomad/playbooks' | grep -q 'creates:'"
+check "apt keys are downloaded on every run" awk '
   /ansible.builtin.get_url:/ { in_get = 1; next }
-  in_get && /url: https:\/\/apt.releases.hashicorp.com\/gpg$/ { found = 1 }
+  in_get && index($0, "url: \"{{ apt_keyring_url }}\"") { found = 1 }
   in_get && /^[[:space:]]*- name:/ { in_get = 0 }
-  /^[[:space:]]*(when|creates):/ && in_get { bad = 1 }
+  in_get && /^[[:space:]]*(when|creates):/ { bad = 1 }
   END { exit !(found && !bad) }
-' "$COMMON"
-keyring_dest="$(awk '/- name: Install the HashiCorp apt keyring/ { f = 1 } f && /dest:/ { print $2; exit }' "$COMMON")"
-check "HashiCorp keyring is installed with copy" assert_eq "$keyring_dest" "/usr/share/keyrings/hashicorp-archive-keyring.gpg"
-check "HashiCorp repo is signed by the refreshed keyring" \
-  assert_eq "$(awk '/signed_by:/ { print $2; exit }' "$COMMON")" "$keyring_dest"
-check "HashiCorp download must hold a public key before it is installed" awk '
-  /- name: Check the HashiCorp download holds a public key/ { checking = 1 }
+' "$KEYRING_TASKS"
+check "an apt key download must hold a public key before it is installed" awk '
+  /- name: Check .* holds a public key/ { checking = 1 }
   checking && /select\(.match., .pub:.\)/ { checked = 1 }
-  /- name: Install the HashiCorp apt keyring/ { exit !checked }
+  /- name: Install / { exit !checked }
   END { exit !checked }
-' "$COMMON"
+' "$KEYRING_TASKS"
+check "the apt keyring is installed by copy" assert_eq \
+  "$(awk '/ansible.builtin.copy:/ { f = 1 } f && /dest:/ { sub(/^[[:space:]]*dest:[[:space:]]*/, ""); print; exit }' "$KEYRING_TASKS")" \
+  '"{{ apt_keyring_path }}"'
 
+role_default() { awk -v key="$2:" '$1 == key { print $2; exit }' "$ROLES/$1/defaults/main.yml"; }
+check "HashiCorp key comes from its apt repo" \
+  assert_eq "$(role_default common hashicorp_apt_key_url)" "https://apt.releases.hashicorp.com/gpg"
+check "Docker key comes from its apt repo" \
+  assert_eq "$(role_default nomad_client docker_apt_key_url)" "https://download.docker.com/linux/debian/gpg"
+
+# Each import_tasks path, resolved from the importing file's directory, exists.
+imports_resolve() {
+  local file path ok=0
+  for file in "$@"; do
+    while read -r path; do
+      if [[ ! -f "$(dirname "$file")/$path" ]]; then
+        echo "${file} imports missing ${path}" >&2
+        ok=1
+      fi
+    done < <(awk '/import_tasks:/ { print $2 }' "$file")
+  done
+  return "$ok"
+}
+check "every task import resolves" imports_resolve "$COMMON" "$CLIENT_ROLE" "$PATCH_PLAY"
+
+# 0 when, in play $2 (empty for a role file), the apt_keyring.yml import for
+# keyring variable $3 comes before the task named $4.
+keyring_refreshed_before() {
+  awk -v play="$2" -v keyring="apt_keyring_path: \"{{ $3 }}\"" -v task="- name: $4" '
+    BEGIN { in_play = (play == "") }
+    play != "" && /^- name:/ { in_play = (index($0, "- name: " play) == 1); next }
+    !in_play { next }
+    /^[[:space:]]*- name:/ { importing = 0 }
+    /import_tasks: .*apt_keyring\.yml$/ { importing = 1 }
+    importing && index($0, keyring) { refreshed = 1 }
+    index($0, task) { found = 1; exit }
+    END { exit !(found && refreshed) }
+  ' "$1"
+}
+check "common refreshes the HashiCorp key before adding its repo" \
+  keyring_refreshed_before "$COMMON" "" hashicorp_apt_keyring "Add HashiCorp repository"
+check "HashiCorp repo is signed by the refreshed keyring" grep -q 'signed_by: "{{ hashicorp_apt_keyring }}"' "$COMMON"
+check "nomad_client refreshes the Docker key before adding its repo" \
+  keyring_refreshed_before "$CLIENT_ROLE" "" docker_apt_keyring "Add Docker repository"
+check "Docker repo is signed by the refreshed keyring" grep -q 'signed_by: "{{ docker_apt_keyring }}"' "$CLIENT_ROLE"
 # Packages an apt task in a role file leaves in the given state.
 role_packages() {
   awk -v want="$2" '
@@ -685,6 +729,63 @@ no_role_removes_common_packages() {
 check "server role still removes docker" \
   bash -c "grep -qx docker-ce <<<'$(role_packages "$ROLES/nomad_server/tasks/main.yml" absent)'"
 check "no role removes a package common installs" no_role_removes_common_packages
+
+# The shared keyring tasks, run for real on this machine against a file:// URL
+# and a keyring in a temp directory.
+if command -v ansible-playbook >/dev/null 2>&1 && command -v gpg >/dev/null 2>&1; then
+  # Short path: gpg-agent sockets live under the home directory on some hosts.
+  KT="$(mktemp -d /tmp/keyring.XXXXXX)"
+  trap 'for h in "$KT"/gpg-*; do gpgconf --homedir "$h" --kill all >/dev/null 2>&1 || true; done; rm -rf "$TMP" "$KT"' EXIT
+  mkdir -p "$KT/tmp"
+  mkdir -m 700 "$KT/gpg-old" "$KT/gpg-new" "$KT/gpg-run"
+  for k in old new; do
+    GNUPGHOME="$KT/gpg-$k" gpg -q --batch --passphrase '' --quick-gen-key "keyring test $k" ed25519 sign never 2>/dev/null
+    GNUPGHOME="$KT/gpg-$k" gpg -q --armor --export >"$KT/$k.asc"
+  done
+  OLD_FPR="$(GNUPGHOME="$KT/gpg-old" gpg --with-colons --fingerprint | awk -F: '/^fpr/ { print $10; exit }')"
+  NEW_FPR="$(GNUPGHOME="$KT/gpg-new" gpg --with-colons --fingerprint | awk -F: '/^fpr/ { print $10; exit }')"
+  echo signed >"$KT/msg"
+  GNUPGHOME="$KT/gpg-old" gpg -q --batch --armor --detach-sign -o "$KT/sig.asc" "$KT/msg"
+  echo '<html><body>503 Service Unavailable</body></html>' >"$KT/html.asc"
+  : >"$KT/ansible.cfg"
+  cat >"$KT/play.yml" <<EOF
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: "$KEYRING_TASKS"
+      vars:
+        apt_keyring_url: "file://$KT/served.asc"
+        apt_keyring_path: "$KT/keyring.gpg"
+EOF
+
+  # Serves $1 and runs the tasks. Prints the recap counts and the keyring's
+  # first fingerprint.
+  keyring_run() {
+    local served="$1" recap fpr
+    shift
+    cp "$KT/$served" "$KT/served.asc"
+    recap="$(GNUPGHOME="$KT/gpg-run" TMPDIR="$KT/tmp" ANSIBLE_CONFIG="$KT/ansible.cfg" \
+      ANSIBLE_NOCOLOR=1 ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_LOCALHOST_WARNING=false \
+      ansible-playbook -i localhost, -e 'ansible_python_interpreter={{ ansible_playbook_python }}' \
+      "$KT/play.yml" "$@" 2>&1 | sed -nE 's/^localhost +: .*changed=([0-9]+).*failed=([0-9]+).*/changed=\1 failed=\2/p')"
+    fpr="$(GNUPGHOME="$KT/gpg-run" gpg --batch --show-keys --with-colons "$KT/keyring.gpg" 2>/dev/null \
+      | awk -F: '/^fpr/ { print $10; exit }')"
+    printf '%s fpr=%s\n' "${recap:-no-recap}" "${fpr:-none}"
+  }
+  check "keyring: the first run installs the key" assert_eq "$(keyring_run old.asc)" "changed=1 failed=0 fpr=${OLD_FPR}"
+  check "keyring: a rerun changes nothing" assert_eq "$(keyring_run old.asc)" "changed=0 failed=0 fpr=${OLD_FPR}"
+  check "keyring: check mode reports a rotation without writing it" \
+    assert_eq "$(keyring_run new.asc --check)" "changed=1 failed=0 fpr=${OLD_FPR}"
+  check "keyring: a rotation replaces the key" assert_eq "$(keyring_run new.asc)" "changed=1 failed=0 fpr=${NEW_FPR}"
+  check "keyring: a rerun after rotation changes nothing" assert_eq "$(keyring_run new.asc)" "changed=0 failed=0 fpr=${NEW_FPR}"
+  check "keyring: an error page is refused" assert_eq "$(keyring_run html.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: a detached signature is refused" assert_eq "$(keyring_run sig.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: staging directories are removed" \
+    assert_eq "$(find "$KT/tmp" -mindepth 1 -maxdepth 1 -name '*apt-key' | wc -l | tr -d ' ')" "0"
+else
+  echo "skip keyring run: needs ansible-playbook and gpg"
+fi
 
 POL="$ROOT/nomad_acl/policies"
 policies_lack() { ! grep -hv '^[[:space:]]*#' "$POL"/*.hcl | grep -Eq "$1"; }
