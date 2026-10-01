@@ -387,7 +387,154 @@ check "manual runner reboot waits until nomad answers" awk '
 ' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "playbook can leave the runner reboot to CI" grep -q 'patch_defer_runner_reboot' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 
-if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
+# A workload identity reads only nomad/jobs/<job>, .../<group>, and
+# .../<group>/<task> without a policy. A job or group path is shared with
+# sibling tasks, so each template must read its own task path.
+nomad_vars_use_task_paths() {
+  awk '
+    function quoted(s) { sub(/^[^"]*"/, "", s); sub(/".*$/, "", s); return s }
+    FNR == 1 { job = ""; group = ""; task = "" }
+    /^[[:space:]]*job[[:space:]]+"/ { job = quoted($0) }
+    /^[[:space:]]*group[[:space:]]+"/ { group = quoted($0); task = "" }
+    /^[[:space:]]*task[[:space:]]+"/ { task = quoted($0) }
+    {
+      line = $0
+      while (match(line, /nomadVar[[:space:]]+"[^"]*"/)) {
+        path = quoted(substr(line, RSTART, RLENGTH))
+        want = "nomad/jobs/" job "/" group "/" task
+        if (path != want) { print FILENAME ": " path " is not " want > "/dev/stderr"; bad = 1 }
+        n++
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+    END { exit (bad || n == 0) }
+  ' "$@"
+}
+
+mapfile -t JOB_FILES < <(find "$ROOT/nomad_jobs" -name '*.nomad.hcl' | sort)
+check "every nomadVar reads its own task path" nomad_vars_use_task_paths "${JOB_FILES[@]}"
+write_job "nomad_jobs/bitcoin/shared.nomad.hcl" 'job "shared" {
+  group "g" {
+    task "t" {
+      template {
+        data = <<EOT
+{{ with nomadVar "nomad/jobs/shared/g/t" }}{{ end }}
+{{ with nomadVar "nomad/jobs/shared" }}{{ end }}
+EOT
+      }
+    }
+  }
+}'
+rejects_shared_path() { ! nomad_vars_use_task_paths "$1" 2>/dev/null; }
+check "a job-level nomadVar is rejected" rejects_shared_path "$TMP/tree/nomad_jobs/bitcoin/shared.nomad.hcl"
+
+TS="$ROOT/nomad_jobs/tailscale/tailscale-proxy.nomad.hcl"
+check "render task has an env workload identity" awk '
+  /^[[:space:]]*task[[:space:]]+"/ { in_render = ($0 ~ /"render"/) }
+  in_render && /^[[:space:]]*identity[[:space:]]*\{/ { in_id = 1 }
+  in_id && /^[[:space:]]*env[[:space:]]*=[[:space:]]*true/ { found = 1 }
+  in_id && /^[[:space:]]*\}/ { in_id = 0 }
+  END { exit !found }
+' "$TS"
+check "render reads NOMAD_TOKEN" grep -q 'TOKEN = os.environ.get("NOMAD_TOKEN", "")' "$TS"
+check "render sends the token on service lookups" grep -q 'headers={"X-Nomad-Token": TOKEN}' "$TS"
+
+# Body of a workflow step's `run: |` block, dedented.
+workflow_step_script() {
+  awk -v step="$2" '
+    $0 ~ "- name: " step "$" { found = 1; next }
+    found && !inrun && /^[[:space:]]*run: \|/ { match($0, /^[[:space:]]*/); base = RLENGTH; inrun = 1; next }
+    inrun {
+      if ($0 ~ /^[[:space:]]*$/) { print ""; next }
+      match($0, /^[[:space:]]*/)
+      if (RLENGTH <= base) exit
+      print substr($0, base + 3)
+    }
+  ' "$1"
+}
+
+# Runs a workflow's token step against a fake HOME. Prints the exit code, what
+# it wrote to GITHUB_ENV, and every output line that carries the token.
+FAKE_TOKEN="00000000-0000-4000-8000-000000000000"
+token_step_case() {
+  local wf="$1" file="$2" content="$3" home rc
+  home="$(mktemp -d)"
+  : >"$home/github_env"
+  if [[ -n "$file" ]]; then
+    mkdir -p "$home/.nomad"
+    printf '%s' "$content" >"$home/.nomad/$file"
+  fi
+  set +e
+  HOME="$home" GITHUB_ENV="$home/github_env" \
+    bash -c "$(workflow_step_script "$wf" 'Load Nomad token')" >"$home/out" 2>&1
+  rc=$?
+  set -e
+  printf '%s\n' "$rc"
+  cat "$home/github_env"
+  grep -F -- "$FAKE_TOKEN" "$home/out" || true
+  rm -rf "$home"
+}
+
+for spec in reconcile.yml:reconcile.token:patch.token \
+  patch-infra.yml:patch.token:reconcile.token \
+  patch-ready.yml:patch.token:reconcile.token; do
+  IFS=: read -r wf_name own_file other_file <<<"$spec"
+  wf_path="$ROOT/.github/workflows/$wf_name"
+  check "${wf_name} has a token step" test -n "$(workflow_step_script "$wf_path" 'Load Nomad token')"
+  check "${wf_name} runs without a token file" \
+    assert_eq "$(token_step_case "$wf_path" "" "")" "0"
+  check "${wf_name} ignores the other workflow's token file" \
+    assert_eq "$(token_step_case "$wf_path" "$other_file" "$FAKE_TOKEN")" "0"
+  check "${wf_name} masks and exports its own token" \
+    assert_eq "$(token_step_case "$wf_path" "$own_file" "$FAKE_TOKEN"$'\n')" \
+    "0"$'\n'"NOMAD_TOKEN=${FAKE_TOKEN}"$'\n'"::add-mask::${FAKE_TOKEN}"
+  check "${wf_name} rejects a malformed token file" \
+    assert_eq "$(token_step_case "$wf_path" "$own_file" $'not-a-token\nBASH_ENV=/tmp/x')" "1"
+done
+
+step_precedes() {
+  awk -v first="- name: $2" -v second="- name: $3" '
+    index($0, first) { seen = 1 }
+    index($0, second) { exit !seen }
+  ' "$1"
+}
+check "reconcile loads the token before nomad runs" step_precedes "$WF" "Load Nomad token" "Reconcile Nomad jobs"
+check "patch loads the token before the playbook" step_precedes "$PATCH" "Load Nomad token" "Patch Nomad hosts"
+check "post-reboot check loads the token before nomad runs" step_precedes "$READY" "Load Nomad token" "Confirm Nomad nodes are ready"
+
+TOKEN_ENV_LINE="NOMAD_TOKEN: \"{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}\""
+every_play_passes_token() {
+  local plays passed
+  plays="$(grep -c '^  hosts:' "$1")"
+  passed="$(grep -cF -- "$TOKEN_ENV_LINE" "$1")"
+  [[ "$plays" -gt 0 && "$plays" == "$passed" ]]
+}
+check "patch playbook passes NOMAD_TOKEN to every play" every_play_passes_token "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "migration playbook passes NOMAD_TOKEN to every play" every_play_passes_token "$ROOT/bootstrap/nomad/playbooks/migrate_pinode2_to_pinode1.yml"
+
+acl_block_enabled() {
+  awk '
+    /^acl[[:space:]]*\{/ { in_acl = 1; next }
+    in_acl && /^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true/ { found = 1 }
+    in_acl && /^\}/ { in_acl = 0 }
+    END { exit !found }
+  ' "$1"
+}
+check "server config enables ACLs" acl_block_enabled "$ROOT/bootstrap/nomad/roles/nomad_server/templates/server.hcl.j2"
+check "client config enables ACLs" acl_block_enabled "$ROOT/bootstrap/nomad/roles/nomad_client/templates/client.hcl.j2"
+check "client introduction is left at its default" bash -c "! grep -rq client_introduction '$ROOT/bootstrap/nomad/roles'"
+
+POL="$ROOT/nomad_acl/policies"
+policies_lack() { ! grep -hv '^[[:space:]]*#' "$POL"/*.hcl | grep -Eq "$1"; }
+check "no anonymous policy" test ! -e "$POL/anonymous.hcl"
+check "policies grant no variable access" policies_lack 'variables'
+check "policies grant no broad job rights" policies_lack 'submit-job|alloc-exec|alloc-lifecycle|read-fs|csi-write-volume|management'
+check "only ci-patch has a write policy" \
+  assert_eq "$(grep -lE '^[[:space:]]*policy[[:space:]]*=[[:space:]]*"write"' "$POL"/*.hcl)" "$POL/ci-patch.hcl"
+check "ci-patch writes only nodes" \
+  assert_eq "$(grep -B1 -E '^[[:space:]]*policy[[:space:]]*=[[:space:]]*"write"' "$POL/ci-patch.hcl")" $'node {\n  policy = "write"'
+
+if grep -E -n 'ansible|midclt|nomad var get|node drain|job stop|job delete|reboot|namespace apply|volume register|nomad acl' "$ROOT/scripts/reconcile-nomad.sh" >/dev/null; then
   echo "FAIL script references a forbidden command" >&2
   FAIL=$((FAIL + 1))
 else
