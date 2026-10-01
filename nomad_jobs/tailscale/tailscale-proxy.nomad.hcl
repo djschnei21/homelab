@@ -194,7 +194,32 @@ EOF
       config {
         image      = "tailscale/tailscale:v1.102.2"
         entrypoint = ["/bin/sh", "-c"]
-        args       = [<<EOF
+        args       = ["exec /bin/sh /local/electrs-gw.sh"]
+      }
+
+      env {
+        TS_TAILNET = "whale-sidewinder.ts.net"
+      }
+
+      volume_mount {
+        volume      = "tailscale-proxy-state"
+        destination = "/data"
+        read_only   = false
+      }
+
+      template {
+        data        = <<EOF
+{{ with nomadVar "nomad/jobs/tailscale-proxy" }}
+TS_AUTHKEY={{ .TS_AUTHKEY }}
+{{ end }}
+EOF
+        destination = "${NOMAD_SECRETS_DIR}/ts.env"
+        env         = true
+        change_mode = "restart"
+      }
+
+      template {
+        data        = <<EOF
 set -e
 mkdir -p /data/electrs-ts
 tailscaled --tun=userspace-networking --statedir=/data/electrs-ts --socket=/tmp/tailscaled.sock --outbound-http-proxy-listen=127.0.0.1:1055 --socks5-server=127.0.0.1:1055 &
@@ -230,8 +255,8 @@ electrs_target() {
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       # Doubled dollar is HCL escaping. The shell sees one dollar.
-      ELECTRS_HOST=*) _host="$${line#ELECTRS_HOST=}" ;;
-      ELECTRS_PORT=*) _port="$${line#ELECTRS_PORT=}" ;;
+      ELECTRS_HOST=*) _host="$$${line#ELECTRS_HOST=}" ;;
+      ELECTRS_PORT=*) _port="$$${line#ELECTRS_PORT=}" ;;
     esac
   done < /alloc/electrs.env
   case "$_host" in
@@ -264,27 +289,7 @@ while true; do
   sleep 10
 done
 EOF
-        ]
-      }
-
-      env {
-        TS_TAILNET = "whale-sidewinder.ts.net"
-      }
-
-      volume_mount {
-        volume      = "tailscale-proxy-state"
-        destination = "/data"
-        read_only   = false
-      }
-
-      template {
-        data        = <<EOF
-{{ with nomadVar "nomad/jobs/tailscale-proxy" }}
-TS_AUTHKEY={{ .TS_AUTHKEY }}
-{{ end }}
-EOF
-        destination = "${NOMAD_SECRETS_DIR}/ts.env"
-        env         = true
+        destination = "local/electrs-gw.sh"
         change_mode = "restart"
       }
 
