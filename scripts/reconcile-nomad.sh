@@ -64,7 +64,7 @@ namespace_for() {
   local file="$1" dir_ns="" file_ns=""
   case "$file" in
     nomad_jobs/bitcoin/*) dir_ns="bitcoin" ;;
-    nomad_jobs/observability/* | nomad_jobs/plugins/*) dir_ns="default" ;;
+    nomad_jobs/observability/* | nomad_jobs/plugins/* | nomad_jobs/tailscale/*) dir_ns="default" ;;
     *)
       echo "no namespace mapping for ${file}" >&2
       return 1

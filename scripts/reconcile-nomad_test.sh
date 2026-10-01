@@ -162,6 +162,7 @@ check "observability namespace from file" assert_eq "$(namespace_for nomad_jobs/
 check "node-exporter namespace from file" assert_eq "$(namespace_for nomad_jobs/observability/node-exporter.nomad.hcl)" "default"
 check "plugins directory default" assert_eq "$(namespace_for nomad_jobs/plugins/nfs-nodes.nomad.hcl)" "default"
 check "plugins controller directory default" assert_eq "$(namespace_for nomad_jobs/plugins/nfs-controller.nomad.hcl)" "default"
+check "tailscale directory default" assert_eq "$(namespace_for nomad_jobs/tailscale/tailscale-proxy.nomad.hcl)" "default"
 
 write_job "nomad_jobs/bitcoin/override.nomad.hcl" 'job "override" {
   namespace = "other"
