@@ -68,12 +68,14 @@
       vars:
         apt_keyring_url: "{{ hashicorp_apt_key_url }}"
         apt_keyring_path: "{{ hashicorp_apt_keyring }}"
+        apt_keyring_fingerprints: "{{ hashicorp_apt_key_fingerprints }}"
 
     - name: Refresh the Docker apt signing key
       ansible.builtin.import_tasks: ../roles/common/tasks/apt_keyring.yml
       vars:
         apt_keyring_url: "{{ docker_apt_key_url }}"
         apt_keyring_path: "{{ docker_apt_keyring }}"
+        apt_keyring_fingerprints: "{{ docker_apt_key_fingerprints }}"
 
     # A failure after drain used to leave the client ineligible. Put it back
     # into service, then fail the host so the roll stops.
@@ -197,6 +199,7 @@
       vars:
         apt_keyring_url: "{{ hashicorp_apt_key_url }}"
         apt_keyring_path: "{{ hashicorp_apt_keyring }}"
+        apt_keyring_fingerprints: "{{ hashicorp_apt_key_fingerprints }}"
 
     - name: Update package cache and upgrade packages
       apt:

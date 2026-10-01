@@ -15,6 +15,7 @@
   vars:
     apt_keyring_url: "{{ hashicorp_apt_key_url }}"
     apt_keyring_path: "{{ hashicorp_apt_keyring }}"
+    apt_keyring_fingerprints: "{{ hashicorp_apt_key_fingerprints }}"
 
 - name: Remove legacy HashiCorp apt repository list
   ansible.builtin.file:

@@ -657,6 +657,44 @@ check "an apt key download must hold a public key before it is installed" awk '
 check "the apt keyring is installed by copy" assert_eq \
   "$(awk '/ansible.builtin.copy:/ { f = 1 } f && /dest:/ { sub(/^[[:space:]]*dest:[[:space:]]*/, ""); print; exit }' "$KEYRING_TASKS")" \
   '"{{ apt_keyring_path }}"'
+check "an apt key download must hold only allowed keys before it is installed" awk '
+  /- name: Check .* holds only allowed keys/ { checking = 1 }
+  checking && /difference\(apt_keyring_allowed\)/ { checked = 1 }
+  /- name: Install / { exit !checked }
+  END { exit !checked }
+' "$KEYRING_TASKS"
+# Every apt_keyring.yml import passes an allowlist.
+imports_pin_fingerprints() {
+  local file imports pins ok=0
+  for file in "$@"; do
+    imports="$(grep -c 'import_tasks: .*apt_keyring\.yml$' "$file")"
+    pins="$(grep -c 'apt_keyring_fingerprints: "{{ [a-z_]*_apt_key_fingerprints }}"' "$file")"
+    if [[ "$imports" -eq 0 || "$imports" != "$pins" ]]; then
+      echo "${file}: ${imports} keyring imports, ${pins} fingerprint allowlists" >&2
+      ok=1
+    fi
+  done
+  return "$ok"
+}
+check "every apt keyring import passes a fingerprint allowlist" \
+  imports_pin_fingerprints "$ROOT/bootstrap/nomad/roles/common/tasks/main.yml" "$ROOT/bootstrap/nomad/roles/nomad_client/tasks/main.yml" "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+# Items of list $2 in role $1's defaults.
+role_default_list() {
+  awk -v key="$2:" '
+    $1 == key { in_list = 1; next }
+    in_list && /^[^[:space:]#]/ { exit }
+    in_list && /^[[:space:]]+- / { print $2 }
+  ' "$ROLES/$1/defaults/main.yml"
+}
+fingerprints_well_formed() {
+  local list
+  list="$(role_default_list "$1" "$2")"
+  [[ -n "$list" ]] && ! grep -vqxE '[0-9A-F]{40}' <<<"$list" && grep -qx "$3" <<<"$list"
+}
+check "HashiCorp key is pinned to its signing key" \
+  fingerprints_well_formed common hashicorp_apt_key_fingerprints D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
+check "Docker key is pinned to its signing key" \
+  fingerprints_well_formed nomad_client docker_apt_key_fingerprints 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 
 role_default() { awk -v key="$2:" '$1 == key { print $2; exit }' "$ROLES/$1/defaults/main.yml"; }
 check "HashiCorp key comes from its apt repo" \
@@ -760,11 +798,14 @@ if command -v ansible-playbook >/dev/null 2>&1 && command -v gpg >/dev/null 2>&1
   KT="$(mktemp -d /tmp/keyring.XXXXXX)"
   trap 'for h in "$KT"/gpg-*; do gpgconf --homedir "$h" --kill all >/dev/null 2>&1 || true; done; rm -rf "$TMP" "$KT"' EXIT
   mkdir -p "$KT/tmp"
-  mkdir -m 700 "$KT/gpg-old" "$KT/gpg-new" "$KT/gpg-run"
-  for k in old new; do
+  mkdir -m 700 "$KT/gpg-old" "$KT/gpg-new" "$KT/gpg-rogue" "$KT/gpg-both" "$KT/gpg-run"
+  for k in old new rogue; do
     GNUPGHOME="$KT/gpg-$k" gpg -q --batch --passphrase '' --quick-gen-key "keyring test $k" ed25519 sign never 2>/dev/null
     GNUPGHOME="$KT/gpg-$k" gpg -q --armor --export >"$KT/$k.asc"
   done
+  # One armored block holding an allowed key and one that is not.
+  GNUPGHOME="$KT/gpg-both" gpg -q --batch --import "$KT/new.asc" "$KT/rogue.asc" 2>/dev/null
+  GNUPGHOME="$KT/gpg-both" gpg -q --armor --export >"$KT/both.asc"
   OLD_FPR="$(GNUPGHOME="$KT/gpg-old" gpg --with-colons --fingerprint | awk -F: '/^fpr/ { print $10; exit }')"
   NEW_FPR="$(GNUPGHOME="$KT/gpg-new" gpg --with-colons --fingerprint | awk -F: '/^fpr/ { print $10; exit }')"
   echo signed >"$KT/msg"
@@ -780,6 +821,7 @@ if command -v ansible-playbook >/dev/null 2>&1 && command -v gpg >/dev/null 2>&1
       vars:
         apt_keyring_url: "file://$KT/served.asc"
         apt_keyring_path: "$KT/keyring.gpg"
+        apt_keyring_fingerprints: ["${OLD_FPR,,}", "$NEW_FPR"]
 EOF
 
   # Serves $1 and runs the tasks. Prints the recap counts and the keyring's
@@ -804,6 +846,11 @@ EOF
   check "keyring: a rerun after rotation changes nothing" assert_eq "$(keyring_run new.asc)" "changed=0 failed=0 fpr=${NEW_FPR}"
   check "keyring: an error page is refused" assert_eq "$(keyring_run html.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
   check "keyring: a detached signature is refused" assert_eq "$(keyring_run sig.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: a key outside the allowlist is refused" assert_eq "$(keyring_run rogue.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: check mode refuses a key outside the allowlist" \
+    assert_eq "$(keyring_run rogue.asc --check)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: an allowed key bundled with another is refused" assert_eq "$(keyring_run both.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: a rerun after refusals changes nothing" assert_eq "$(keyring_run new.asc)" "changed=0 failed=0 fpr=${NEW_FPR}"
   check "keyring: staging directories are removed" \
     assert_eq "$(find "$KT/tmp" -mindepth 1 -maxdepth 1 -name '*apt-key' | wc -l | tr -d ' ')" "0"
 else

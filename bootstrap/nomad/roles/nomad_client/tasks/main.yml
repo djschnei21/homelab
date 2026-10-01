@@ -40,6 +40,7 @@
   vars:
     apt_keyring_url: "{{ docker_apt_key_url }}"
     apt_keyring_path: "{{ docker_apt_keyring }}"
+    apt_keyring_fingerprints: "{{ docker_apt_key_fingerprints }}"
 
 - name: Remove legacy Docker apt repository list
   ansible.builtin.file:
