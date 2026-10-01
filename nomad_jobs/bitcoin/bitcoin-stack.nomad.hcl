@@ -17,6 +17,11 @@ job "bitcoin-stack" {
       unlimited      = false
     }
 
+    # Nomad requires the progress deadline to exceed bitcoind's 15m kill_timeout.
+    update {
+      progress_deadline = "20m"
+    }
+
     volume "bitcoin-data" {
       type            = "csi"
       read_only       = false
@@ -37,6 +42,9 @@ job "bitcoin-stack" {
 
     task "bitcoind" {
       driver = "docker"
+
+      # Chainstate flush can take minutes; client max_kill_timeout is 20m.
+      kill_timeout = "15m"
 
       # nomadVar renders in templates only, and bitcoind accepts rpcauth as a flag.
       template {
@@ -179,6 +187,8 @@ EOF
 
     task "electrs" {
       driver = "docker"
+
+      kill_timeout = "2m"
 
       template {
         data = <<EOF
@@ -518,6 +528,8 @@ EOF
 
     task "albyhub" {
       driver = "docker"
+
+      kill_timeout = "2m"
 
       template {
         destination = "${NOMAD_SECRETS_DIR}/env.txt"
