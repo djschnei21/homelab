@@ -1,7 +1,12 @@
 ---
+# nomad runs on the Pis, not on the controller, so each play hands the
+# controller's NOMAD_TOKEN (CI loads the ci-patch token) to the remote task
+# environment. Empty means ACLs are off and the CLI sends no token.
 - name: Pre-flight cluster health check
   hosts: nomad_servers
   become: false
+  environment:
+    NOMAD_TOKEN: "{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}"
   tasks:
     - name: Verify Nomad cluster is healthy
       command: nomad server members
@@ -35,6 +40,8 @@
   # A failed host must stop the server play. Rebooting the server on top of a
   # half-patched client is how the cluster ends up neither updated nor running.
   any_errors_fatal: true
+  environment:
+    NOMAD_TOKEN: "{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}"
   tasks:
     - name: Get node ID
       command: nomad node status -self -json
@@ -156,6 +163,8 @@
 - name: Patch Nomad Server
   hosts: nomad_servers
   become: true
+  environment:
+    NOMAD_TOKEN: "{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}"
   tasks:
     - name: Display server being patched
       debug:

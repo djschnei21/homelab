@@ -31,5 +31,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The file holds only the ci-reconcile secret (nomad_acl/policies/).
+      # No file means ACLs are still off, so the run goes on without a token.
+      - name: Load Nomad token
+        run: |
+          set -euo pipefail
+          token_file="$HOME/.nomad/reconcile.token"
+          if [[ ! -e "$token_file" ]]; then
+            echo "::notice::no ${token_file}; running without a Nomad token"
+            exit 0
+          fi
+          token="$(tr -d '[:space:]' <"$token_file")"
+          if [[ ! "$token" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+            echo "::error::${token_file} does not hold a Nomad token secret ID"
+            exit 1
+          fi
+          echo "::add-mask::${token}"
+          echo "NOMAD_TOKEN=${token}" >>"$GITHUB_ENV"
+          echo "::notice::loaded Nomad token from ${token_file}"
+
       - name: Reconcile Nomad jobs
         run: scripts/reconcile-nomad.sh

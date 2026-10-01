@@ -43,7 +43,7 @@ job "bitcoin-stack" {
         destination = "${NOMAD_SECRETS_DIR}/rpc.env"
         env         = true
         data        = <<EOT
-rpcauth={{ with nomadVar "nomad/jobs/bitcoin-stack/bitcoind" }}{{ .rpcauth }}{{ end }}
+rpcauth={{ with nomadVar "nomad/jobs/bitcoin-stack/bitcoin/bitcoind" }}{{ .rpcauth }}{{ end }}
 EOT
       }
 
@@ -339,8 +339,8 @@ EOF
         destination = "${NOMAD_SECRETS_DIR}/env.txt"
         env         = true
         data        = <<EOT
-MYSQL_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/mariadb" }}{{ .MYSQL_PASSWORD }}{{ end }}
-MYSQL_ROOT_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/mariadb" }}{{ .MYSQL_ROOT_PASSWORD }}{{ end }}
+MYSQL_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/mempool/mariadb" }}{{ .MYSQL_PASSWORD }}{{ end }}
+MYSQL_ROOT_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/mempool/mariadb" }}{{ .MYSQL_ROOT_PASSWORD }}{{ end }}
 EOT
       }
 
@@ -369,7 +369,7 @@ CORE_RPC_PORT={{ .Port }}
 ELECTRUM_HOST={{ .Address }}
 ELECTRUM_PORT={{ .Port }}
 {{ end }}
-{{ with nomadVar "nomad/jobs/bitcoin-stack/backend" }}
+{{ with nomadVar "nomad/jobs/bitcoin-stack/mempool/backend" }}
 CORE_RPC_USERNAME={{ .rpc_user }}
 CORE_RPC_PASSWORD={{ .rpc_password }}
 {{ end }}
@@ -383,7 +383,7 @@ EOF
         destination = "${NOMAD_SECRETS_DIR}/db.env"
         env         = true
         data        = <<EOT
-DATABASE_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/backend" }}{{ .DATABASE_PASSWORD }}{{ end }}
+DATABASE_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/mempool/backend" }}{{ .DATABASE_PASSWORD }}{{ end }}
 EOT
       }
 
@@ -523,8 +523,8 @@ EOF
         destination = "${NOMAD_SECRETS_DIR}/env.txt"
         env         = true
         data        = <<EOT
-AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/albyhub" }}{{ .AUTO_UNLOCK_PASSWORD }}{{ end }}
-DATABASE_URI=postgresql://albyhub:{{ with nomadVar "nomad/jobs/bitcoin-stack/albyhub" }}{{ .DB_PASSWORD }}{{ end }}@192.168.68.50:5432/nwc?sslmode=disable
+AUTO_UNLOCK_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/albyhub/albyhub" }}{{ .AUTO_UNLOCK_PASSWORD }}{{ end }}
+DATABASE_URI=postgresql://albyhub:{{ with nomadVar "nomad/jobs/bitcoin-stack/albyhub/albyhub" }}{{ .DB_PASSWORD }}{{ end }}@192.168.68.50:5432/nwc?sslmode=disable
 EOT
       }
 
