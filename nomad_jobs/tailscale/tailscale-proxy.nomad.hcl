@@ -36,6 +36,13 @@ job "tailscale-proxy" {
         args    = ["-u", "/local/render.py"]
       }
 
+      # Nomad lets any workload identity read services in any namespace, so
+      # this token needs no ACL policy for the bitcoin lookups.
+      identity {
+        env         = true
+        change_mode = "restart"
+      }
+
       env {
         NOMAD_API  = "http://192.168.68.65:4646"
         TS_TAILNET = "whale-sidewinder.ts.net"
@@ -46,13 +53,15 @@ job "tailscale-proxy" {
 import json, os, time, urllib.request
 
 API = os.environ.get("NOMAD_API", "http://192.168.68.65:4646")
+TOKEN = os.environ.get("NOMAD_TOKEN", "")
 TAILNET = os.environ.get("TS_TAILNET", "whale-sidewinder.ts.net")
 CADDY = "/alloc/Caddyfile"
 ELECTRS = "/alloc/electrs.env"
 
 def svc(name, ns="default"):
     url = f"{API}/v1/service/{name}?namespace={ns}"
-    with urllib.request.urlopen(url, timeout=5) as r:
+    req = urllib.request.Request(url, headers={"X-Nomad-Token": TOKEN})
+    with urllib.request.urlopen(req, timeout=5) as r:
         data = json.load(r)
     if not data:
         raise RuntimeError(f"no instances for {name}@{ns}")
