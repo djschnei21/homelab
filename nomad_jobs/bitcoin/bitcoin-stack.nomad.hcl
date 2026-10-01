@@ -38,6 +38,9 @@ job "bitcoin-stack" {
     task "bitcoind" {
       driver = "docker"
 
+      # Chainstate flush can take minutes; client max_kill_timeout is 20m.
+      kill_timeout = "15m"
+
       # nomadVar renders in templates only, and bitcoind accepts rpcauth as a flag.
       template {
         destination = "${NOMAD_SECRETS_DIR}/rpc.env"
@@ -179,6 +182,8 @@ EOF
 
     task "electrs" {
       driver = "docker"
+
+      kill_timeout = "2m"
 
       template {
         data = <<EOF
@@ -518,6 +523,8 @@ EOF
 
     task "albyhub" {
       driver = "docker"
+
+      kill_timeout = "2m"
 
       template {
         destination = "${NOMAD_SECRETS_DIR}/env.txt"
