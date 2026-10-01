@@ -3,6 +3,9 @@ datacenter = "homelab"
 
 client {
   enabled = true
+  # The 30s default caps every task kill_timeout, and bitcoind needs minutes
+  # to flush.
+  max_kill_timeout = "20m"
   servers = {{ groups['nomad_servers'] | map('extract', hostvars, ['ansible_host']) | list | to_json }}
   options {
     "docker.privileged.enabled" = "true"
