@@ -52,8 +52,12 @@ check "node updates one client at a time" grep -q 'max_parallel = 1' "$NODE"
 check "node has no API key" lacks "$NODE" "apiKey"
 check "node has no nomad variable" lacks "$NODE" "nomadVar"
 check "node matches the extent and CHAP settings" bash -c 'grep -q "extentBlocksize: 4096" "$1" && grep -q "targetGroupAuthType: CHAP" "$1"' bash "$NODE"
-check "CA placeholder is not a certificate" lacks "$CA" "BEGIN CERTIFICATE"
-check "CA placeholder names nas2" grep -q '192.168.68.50' "$CA"
+check "CA file is the homelab-nas2-ca certificate" bash -c '
+  openssl x509 -in "$1" -noout -subject -enddate -ext basicConstraints |
+    grep -q "CN = homelab-nas2-ca" &&
+  openssl x509 -in "$1" -noout -enddate | grep -q "Sep 28 19:01:38 2036 GMT" &&
+  openssl x509 -in "$1" -noout -ext basicConstraints | grep -q "CA:TRUE"
+' bash "$CA"
 
 VOL="$ROOT/nomad_volumes/iscsi"
 check "volume specs are sized" bash -c "! grep -R -q CAPACITY_PLACEHOLDER '$VOL'"
