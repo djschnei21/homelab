@@ -439,6 +439,31 @@ check "render task has an env workload identity" awk '
 check "render reads NOMAD_TOKEN" grep -q 'TOKEN = os.environ.get("NOMAD_TOKEN", "")' "$TS"
 check "render sends the token on service lookups" grep -q 'headers={"X-Nomad-Token": TOKEN}' "$TS"
 
+# The electrs-gw script as HCL hands it to the template engine. Template data
+# gets one HCL pass, so $${ becomes ${ and nothing else changes.
+electrs_gw_script() {
+  awk '
+    /^[[:space:]]*task[[:space:]]+"/ { in_gw = ($0 ~ /"electrs-gw"/) }
+    in_gw && /<<EOF$/ { body = ""; in_data = 1; next }
+    in_data && /^EOF$/ { in_data = 0; next }
+    in_data { body = body $0 "\n"; next }
+    in_gw && /destination[[:space:]]*=[[:space:]]*"local\/electrs-gw.sh"/ { printf "%s", body; found = 1; exit }
+    END { exit !found }
+  ' "$TS" | sed 's/\$\${/${/g'
+}
+
+electrs_target_for() {
+  local env_file="$TMP/electrs.env" fn="$TMP/electrs_target.sh"
+  printf '%s' "$1" >"$env_file"
+  electrs_gw_script | awk '/^electrs_target\(\) \{/ { f = 1 } f { print } f && /^\}$/ { exit }' |
+    sed "s#/alloc/electrs.env#${env_file}#" >"$fn"
+  sh -c '. "$1" && electrs_target' sh "$fn"
+}
+electrs_rejects() { ! electrs_target_for "$1" >/dev/null 2>&1; }
+check "electrs-gw serves the rendered upstream" \
+  assert_eq "$(electrs_target_for $'ELECTRS_HOST=192.168.68.61\nELECTRS_PORT=50001\n')" "tcp://192.168.68.61:50001"
+check "electrs-gw rejects a host with shell syntax" electrs_rejects $'ELECTRS_HOST=$(id)\nELECTRS_PORT=50001\n'
+
 # Body of a workflow step's `run: |` block, dedented.
 workflow_step_script() {
   awk -v step="$2" '
