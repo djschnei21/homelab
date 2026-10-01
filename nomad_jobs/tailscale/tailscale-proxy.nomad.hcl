@@ -99,10 +99,6 @@ def render():
       hostname alby
       state_dir /data/caddy-ts/alby
     }}
-    nomad {{
-      hostname nomad
-      state_dir /data/caddy-ts/nomad
-    }}
   }}
 }}
 
@@ -114,7 +110,6 @@ def render():
 {site("prometheus", f"{prometheus[0]}:{prometheus[1]}")}
 {site("mempool", f"{mempool[0]}:{mempool[1]}")}
 {site("alby", f"{alby[0]}:{alby[1]}")}
-{site("nomad", "192.168.68.65:4646")}
 '''
     electrs_env = f"ELECTRS_HOST={electrs[0]}\nELECTRS_PORT={electrs[1]}\n"
     return caddy, electrs_env
@@ -151,7 +146,7 @@ EOF
       driver = "docker"
 
       config {
-        image      = "ghcr.io/tailscale/caddy-tailscale:main"
+        image      = "ghcr.io/tailscale/caddy-tailscale@sha256:d9607d404af12e76df51c5593412bf2a2185126cd2c63b48c6917881166cd3d8"
         entrypoint = ["/bin/sh", "-c"]
         args       = ["while [ ! -s /alloc/Caddyfile ]; do echo waiting for Caddyfile; sleep 2; done; exec caddy run --watch --config /alloc/Caddyfile --adapter caddyfile"]
         ports      = ["health"]
@@ -225,19 +220,45 @@ warm() {
   done
   echo "warm failed $1"
 }
-for h in grafana prometheus mempool alby nomad; do
+for h in grafana prometheus mempool alby; do
   warm "$h" &
 done
+# electrs.env is data. Sourcing it would run whatever the file contains.
+electrs_target() {
+  _host=""
+  _port=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      # Doubled dollar is HCL escaping. The shell sees one dollar.
+      ELECTRS_HOST=*) _host="$${line#ELECTRS_HOST=}" ;;
+      ELECTRS_PORT=*) _port="$${line#ELECTRS_PORT=}" ;;
+    esac
+  done < /alloc/electrs.env
+  case "$_host" in
+    ""|*[!A-Za-z0-9.-]*) return 1 ;;
+  esac
+  case "$_host" in
+    *[A-Za-z0-9]*) ;;
+    *) return 1 ;;
+  esac
+  case "$_port" in
+    [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]|[1-5][0-9][0-9][0-9][0-9]|6[0-4][0-9][0-9][0-9]|65[0-4][0-9][0-9]|655[0-2][0-9]|6553[0-5]) ;;
+    *) return 1 ;;
+  esac
+  printf 'tcp://%s:%s\n' "$_host" "$_port"
+}
 current=""
 while true; do
   if [ -s /alloc/electrs.env ]; then
-    . /alloc/electrs.env
-    dest="tcp://$ELECTRS_HOST:$ELECTRS_PORT"
-    if [ "$dest" != "$current" ]; then
-      tailscale --socket=/tmp/tailscaled.sock serve --tls-terminated-tcp=50002 off || true
-      tailscale --socket=/tmp/tailscaled.sock serve --bg --tls-terminated-tcp=50002 "$dest"
-      current="$dest"
-      echo "serve $dest"
+    if dest=$(electrs_target); then
+      if [ "$dest" != "$current" ]; then
+        tailscale --socket=/tmp/tailscaled.sock serve --tls-terminated-tcp=50002 off || true
+        tailscale --socket=/tmp/tailscaled.sock serve --bg --tls-terminated-tcp=50002 "$dest"
+        current="$dest"
+        echo "serve $dest"
+      fi
+    else
+      echo "electrs upstream rejected"
     fi
   fi
   sleep 10
