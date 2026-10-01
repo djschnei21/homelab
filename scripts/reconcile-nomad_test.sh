@@ -387,6 +387,34 @@ check "manual runner reboot waits until nomad answers" awk '
 ' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "playbook can leave the runner reboot to CI" grep -q 'patch_defer_runner_reboot' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 
+TESTWF="$ROOT/.github/workflows/test.yml"
+check "test workflow runs on pull requests" grep -Eq '^[[:space:]]*pull_request:' "$TESTWF"
+check "test workflow runs on pushes to main" awk '
+  /^[[:space:]]*push:/ { in_push = 1; next }
+  in_push && /^[[:space:]]*- main$/ { found = 1 }
+  in_push && /^[^[:space:]]/ { in_push = 0 }
+  END { exit !found }
+' "$TESTWF"
+check "test workflow is GitHub-hosted" assert_eq "$(grep 'runs-on:' "$TESTWF" | tr -d ' ')" "runs-on:ubuntu-latest"
+check "test workflow can only read contents" assert_eq "$(grep -A1 'permissions:' "$TESTWF")" $'permissions:\n  contents: read'
+check "test workflow uses no secrets" bash -c "! grep -v '^[[:space:]]*#' '$TESTWF' | grep -q secrets"
+check "test workflow runs every repo test" grep -qF 'scripts/*_test.sh' "$TESTWF"
+
+# Pull request code must never reach the homelab runner. It holds Nomad tokens.
+pr_workflows_are_hosted() {
+  local wf body bad=0
+  for wf in "$ROOT"/.github/workflows/*.yml; do
+    body="$(grep -v '^[[:space:]]*#' "$wf")"
+    if [[ "$body" == *pull_request* && "$body" == *self-hosted* ]]; then
+      echo "${wf}: pull request workflow uses the self-hosted runner" >&2
+      bad=1
+    fi
+  done
+  return "$bad"
+}
+check "pull request workflows never use the self-hosted runner" pr_workflows_are_hosted
+check "no workflow uses pull_request_target" bash -c "! grep -q pull_request_target '$ROOT'/.github/workflows/*.yml"
+
 # A workload identity reads only nomad/jobs/<job>, .../<group>, and
 # .../<group>/<task> without a policy. A job or group path is shared with
 # sibling tasks, so each template must read its own task path.
