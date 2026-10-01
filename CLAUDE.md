@@ -34,6 +34,7 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
   - `bitcoin/` - Bitcoin-related service jobs
   - `observability/` - Prometheus, Grafana, and node-exporter jobs
   - `plugins/` - NFS CSI controller and node plugin jobs
+- `nomad_acl/policies/` - Least-privilege ACL policies for CI tokens
 - `nomad_namespaces/` - Namespace definitions (bitcoin-ns)
 - `nomad_volumes/` - CSI volume definitions for persistent storage
 
@@ -43,6 +44,15 @@ Nomad server runs on pinode1. Set the address:
 ```bash
 export NOMAD_ADDR=http://pinode1.local:4646
 ```
+
+With ACLs enabled, every command also needs a token. The anonymous token gets nothing.
+```bash
+export NOMAD_TOKEN="$(cat ~/.nomad/<name>.token)"   # file holds only the secret ID
+```
+Policies live in `nomad_acl/policies/`; each file's header has its apply and token-create
+commands. CI reads `$HOME/.nomad/reconcile.token` (reconcile) and `$HOME/.nomad/patch.token`
+(patch workflows) on the runner and runs without a token when the file is absent. The
+Ansible playbooks pass `NOMAD_TOKEN` to the `nomad` commands they run on the Pis.
 
 **Deploy a Nomad job:**
 ```bash
@@ -77,7 +87,9 @@ cd bootstrap/nomad && ansible-playbook -i ../inventory.yml nomad_cluster.yml
 ## Key Patterns
 
 - Services discover each other via Nomad service templates using `nomadService` lookups
-- Secrets stored in Nomad variables and accessed via `nomadVar`
+- Secrets stored in Nomad variables and accessed via `nomadVar` at the consuming task's path,
+  `nomad/jobs/<job>/<group>/<task>`. A workload identity reads only its job, group, and task
+  paths without a policy, and a job or group path is readable by every task under it.
 - All services use bridge networking with explicit port mappings
 - Volumes use `multi-node-single-writer` access mode for read-only sharing across tasks
 - Jobs define resource constraints (memory/CPU) and health checks
