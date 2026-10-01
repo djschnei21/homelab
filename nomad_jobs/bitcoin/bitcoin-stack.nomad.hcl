@@ -378,12 +378,12 @@ EOF
         env         = true
       }
 
-      # MYSQL_PASSWORD is the shared MariaDB user password, same key as task mariadb.
+      # This path already stores DATABASE_PASSWORD next to rpc_user and rpc_password.
       template {
         destination = "${NOMAD_SECRETS_DIR}/db.env"
         env         = true
         data        = <<EOT
-DATABASE_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/backend" }}{{ .MYSQL_PASSWORD }}{{ end }}
+DATABASE_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/backend" }}{{ .DATABASE_PASSWORD }}{{ end }}
 EOT
       }
 
