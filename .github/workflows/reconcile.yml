@@ -20,6 +20,8 @@ concurrency:
 
 env:
   NOMAD_ADDR: http://192.168.68.65:4646
+  # The CLI appends Web UI hint lines to table output.
+  NOMAD_CLI_SHOW_HINTS: "0"
   # Print registered images into the check. The Actions log store is blocked
   # from outside the LAN.
   RECONCILE_STATUS: "1"

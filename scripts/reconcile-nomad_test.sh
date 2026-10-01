@@ -318,6 +318,7 @@ check "workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646'
 check "workflow comment tracks deployment" grep -q 'until the deployment succeeds' "$WF"
 check "workflow shares the cluster lock" grep -q 'group: homelab-cluster' "$WF"
 check "workflow records registered tasks" grep -q 'RECONCILE_STATUS: "1"' "$WF"
+check "workflow turns off nomad CLI hints" grep -q 'NOMAD_CLI_SHOW_HINTS: "0"' "$WF"
 
 PATCH="$ROOT/.github/workflows/patch-infra.yml"
 check "patch workflow has no pull_request" bash -c "! grep -q pull_request '$PATCH'"
