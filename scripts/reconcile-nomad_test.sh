@@ -331,7 +331,7 @@ check "patch ssh keeps host key checking" bash -c "! grep -q 'StrictHostKeyCheck
 check "patch workflow passes the actions token" grep -q 'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}' "$PATCH"
 check "patch playbook creates the result directory" grep -q 'state: directory' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "patch workflow does not run on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$PATCH'"
-check "patch workflow reports node status" grep -q 'nomad node status -no-color' "$PATCH"
+check "patch workflow reports node status" grep -q 'scripts/nomad-nodes-ready.py' "$PATCH"
 check "patch workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$PATCH"
 check "patch workflow fails if a node is not ready" grep -q 'a nomad node is not ready after patch' "$PATCH"
 check "patch workflow publishes per-host results" grep -q 'homelab-patch-results' "$PATCH"
@@ -369,8 +369,8 @@ check "post-reboot check stays on the homelab runner" bash -c "! grep -q 'ubuntu
 check "post-reboot check requeues while reboot is scheduled" grep -q 'requeued Nomad recheck attempt' "$READY"
 check "post-reboot check uses nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$READY"
 check "post-reboot check shares the cluster lock" grep -q 'group: homelab-cluster' "$READY"
-check "post-reboot check waits for three clients" grep -q 'n >= 3' "$READY"
-check "patch workflow requires three ready clients" grep -q 'n >= 3' "$PATCH"
+check "post-reboot check waits for three clients" grep -q 'nomad-nodes-ready.py" --min 3 ' "$READY"
+check "patch workflow requires three ready clients" grep -q 'nomad-nodes-ready.py" --min 3 ' "$PATCH"
 check "patch workflow defers the runner reboot" grep -q 'patch_defer_runner_reboot=true' "$PATCH"
 check "patch workflow reboots the runner after the readiness check" awk '
   /a nomad node is not ready after patch/ { failed = 1 }
@@ -378,8 +378,16 @@ check "patch workflow reboots the runner after the readiness check" awk '
   /shutdown -r \+1/ { if (!dispatched) exit 1; found = 1 }
   END { exit !(failed && dispatched && found) }
 ' "$PATCH"
-check "patch workflow bounds the nomad status call" grep -q 'timeout 15 nomad node status -no-color' "$PATCH"
-check "post-reboot check bounds the nomad status call" grep -q 'timeout 15 nomad node status -no-color' "$READY"
+check "patch workflow bounds the nomad status call" grep -q 'nomad-nodes-ready.py" .*--timeout 15' "$PATCH"
+check "post-reboot check bounds the nomad status call" grep -q 'nomad-nodes-ready.py" .*--timeout 15' "$READY"
+check "patch workflow waits for clients after an in-band server reboot" grep -q 'nomad-nodes-ready.py" .*--attempts 18' "$PATCH"
+check "post-reboot check waits for clients to rejoin" grep -q 'nomad-nodes-ready.py" .*--attempts 18' "$READY"
+for wf_path in "$PATCH" "$READY"; do
+  wf_name="$(basename "$wf_path")"
+  check "${wf_name} turns off nomad CLI hints" grep -q 'NOMAD_CLI_SHOW_HINTS: "0"' "$wf_path"
+  check "${wf_name} reads node status only through the JSON check" bash -c "! grep -q 'nomad node status' '$wf_path'"
+  check "${wf_name} runs the checked-out readiness script" grep -q '"${GITHUB_WORKSPACE}/scripts/nomad-nodes-ready.py"' "$wf_path"
+done
 check "manual runner reboot waits until nomad answers" awk '
   /Wait for Nomad server to be ready/ { waited = 1 }
   /shutdown -r \+2/ { if (!waited) exit 1; found = 1 }
@@ -501,6 +509,107 @@ step_precedes() {
 check "reconcile loads the token before nomad runs" step_precedes "$WF" "Load Nomad token" "Reconcile Nomad jobs"
 check "patch loads the token before the playbook" step_precedes "$PATCH" "Load Nomad token" "Patch Nomad hosts"
 check "post-reboot check loads the token before nomad runs" step_precedes "$READY" "Load Nomad token" "Confirm Nomad nodes are ready"
+check "post-reboot check checks out the readiness script" step_precedes "$READY" "Checkout" "Confirm Nomad nodes are ready"
+
+# Executable fake for nomad-nodes-ready.py, which runs nomad as a subprocess.
+# It always prints the Web UI hint on stderr, as table output does with hints on.
+FAKE_BIN="$TMP/bin"
+mkdir -p "$FAKE_BIN"
+cat >"$FAKE_BIN/nomad" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_NOMAD_CALLS"
+echo "==> View and manage Nomad clients in the Web UI: http://192.168.68.65:4646/ui/clients" >&2
+if (( $(wc -l <"$FAKE_NOMAD_CALLS") <= ${FAKE_NOMAD_FAIL_FIRST:-0} )); then
+  echo "Error querying node status: Unexpected response code: 500 (No cluster leader)" >&2
+  exit 1
+fi
+if [[ -n "${FAKE_NOMAD_SLEEP:-}" ]]; then
+  exec sleep "$FAKE_NOMAD_SLEEP"
+fi
+cat "$FAKE_NOMAD_STDOUT"
+EOF
+chmod +x "$FAKE_BIN/nomad"
+
+nodes_json() {
+  local sep="" spec
+  printf '['
+  for spec in "$@"; do
+    printf '%s{"ID": "id-%s", "Name": "%s", "Status": "%s", "SchedulingEligibility": "eligible", "Drain": false}' \
+      "$sep" "${spec%%:*}" "${spec%%:*}" "${spec#*:}"
+    sep=", "
+  done
+  printf ']\n'
+}
+
+# Prints the exit code, then the script's output. nomad calls land in $TMP/ready-calls.
+ready_case() {
+  local stdout="$1" rc
+  shift
+  printf '%s\n' "$stdout" >"$TMP/ready-stdout"
+  : >"$TMP/ready-calls"
+  set +e
+  PATH="$FAKE_BIN:$PATH" FAKE_NOMAD_STDOUT="$TMP/ready-stdout" FAKE_NOMAD_CALLS="$TMP/ready-calls" \
+    FAKE_NOMAD_FAIL_FIRST="${FAKE_NOMAD_FAIL_FIRST:-0}" FAKE_NOMAD_SLEEP="${FAKE_NOMAD_SLEEP:-}" \
+    GITHUB_ACTIONS="${READY_ACTIONS:-}" "$ROOT/scripts/nomad-nodes-ready.py" --delay 0 "$@" >"$TMP/ready-out" 2>&1
+  rc=$?
+  set -e
+  printf '%s\n' "$rc"
+  cat "$TMP/ready-out"
+}
+
+UI_HINT="==> View and manage Nomad clients in the Web UI: http://192.168.68.65:4646/ui/clients"
+READY3="$(nodes_json pinode2:ready pinode4:ready pinode3:ready)"
+check "three ready nodes pass" assert_eq "$(ready_case "$READY3" --min 3)" "0
+node pinode2 status=ready eligibility=eligible drain=false
+node pinode3 status=ready eligibility=eligible drain=false
+node pinode4 status=ready eligibility=eligible drain=false"
+check "readiness reads node status as JSON" assert_eq "$(cat "$TMP/ready-calls")" "node status -json"
+check "a hint on stdout around the JSON does not fail a ready cluster" \
+  assert_eq "$(ready_case "${UI_HINT}"$'\n'"${READY3}"$'\n'"${UI_HINT}" --min 3 | head -n 1)" "0"
+# Table output from the first real patch run: every node ready, hint last.
+check "table output is not mistaken for a node list" assert_eq "$(ready_case "ID        Node Pool  DC       Name     Class   Drain  Eligibility  Status
+68d76dab  default    homelab  pinode2  <none>  false  eligible     ready
+ea425cc0  default    homelab  pinode4  <none>  false  eligible     ready
+593daf4e  default    homelab  pinode3  <none>  false  eligible     ready
+
+${UI_HINT}" --min 3)" "1
+no JSON node list in nomad node status output"
+check "a down node fails" assert_eq "$(ready_case "$(nodes_json pinode2:ready pinode3:down pinode4:ready)" --min 3 | sed -n '1p;3p')" "1
+node pinode3 status=down eligibility=eligible drain=false"
+check "an initializing node fails" assert_eq "$(ready_case "$(nodes_json pinode2:ready pinode3:initializing pinode4:ready)" --min 3 | head -n 1)" "1"
+check "two of three clients fail" assert_eq "$(ready_case "$(nodes_json pinode2:ready pinode3:ready)" --min 3 | sed -n '1p;$p')" "1
+2 nodes listed, want at least 3"
+check "an empty node list fails" assert_eq "$(ready_case "[]" --min 3)" "1
+0 nodes listed, want at least 3"
+check "a non-object entry fails" assert_eq "$(ready_case '["pinode2"]' --min 0 | head -n 1)" "1"
+check "a nomad error fails with its message" assert_eq "$(FAKE_NOMAD_FAIL_FIRST=9 ready_case "$READY3" --min 3)" "1
+nomad node status exited 1
+${UI_HINT}
+Error querying node status: Unexpected response code: 500 (No cluster leader)"
+check "a leaderless server is retried" assert_eq "$(FAKE_NOMAD_FAIL_FIRST=2 ready_case "$READY3" --min 3 --attempts 3 | head -n 1)" "0"
+check "retries call nomad once per attempt" assert_eq "$(wc -l <"$TMP/ready-calls" | tr -d ' ')" "3"
+check "retries stop at the attempt limit" assert_eq "$(FAKE_NOMAD_FAIL_FIRST=9 ready_case "$READY3" --min 3 --attempts 2 | head -n 1)" "1"
+check "retries stop at the attempt limit after two calls" assert_eq "$(wc -l <"$TMP/ready-calls" | tr -d ' ')" "2"
+check "a hung nomad call is bounded" assert_eq "$(FAKE_NOMAD_SLEEP=5 ready_case "$READY3" --min 3 --timeout 0.2)" "1
+nomad node status timed out after 0.2s"
+check "node lines are checks notices under Actions" assert_eq "$(READY_ACTIONS=true ready_case "$READY3" --min 3 | sed -n 2p)" \
+  "::notice::node pinode2 status=ready eligibility=eligible drain=false"
+
+# The post-reboot step itself, run from this checkout against the fake.
+if [[ ! -e /run/systemd/shutdown/scheduled ]]; then
+  printf '%s\n' "$READY3" >"$TMP/ready-stdout"
+  : >"$TMP/ready-calls"
+  set +e
+  PATH="$FAKE_BIN:$PATH" FAKE_NOMAD_STDOUT="$TMP/ready-stdout" FAKE_NOMAD_CALLS="$TMP/ready-calls" \
+    GITHUB_WORKSPACE="$ROOT" GITHUB_ACTIONS=true RECHECK_ATTEMPT=0 \
+    bash -c "$(workflow_step_script "$READY" 'Confirm Nomad nodes are ready')" >"$TMP/ready-step" 2>&1
+  step_rc=$?
+  set -e
+  check "post-reboot step passes a ready cluster" assert_eq "$step_rc" "0"
+  check "post-reboot step notices each node" grep -q '^::notice::node pinode3 status=ready' "$TMP/ready-step"
+  check "post-reboot step reports the cluster ready" grep -q '^::notice::all nomad nodes ready after patch$' "$TMP/ready-step"
+  check "post-reboot step prints no error" bash -c "! grep -q '::error::' '$TMP/ready-step'"
+fi
 
 TOKEN_ENV_LINE="NOMAD_TOKEN: \"{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}\""
 every_play_passes_token() {
