@@ -1,7 +1,9 @@
 ---
+# ca-certificates: the key download and apt both reach HashiCorp over https.
 - name: Install prerequisite packages
   apt:
     name:
+      - ca-certificates
       - wget
       - gpg
       - cgroup-tools

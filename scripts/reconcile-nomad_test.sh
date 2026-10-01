@@ -633,6 +633,39 @@ check "server config enables ACLs" acl_block_enabled "$ROOT/bootstrap/nomad/role
 check "client config enables ACLs" acl_block_enabled "$ROOT/bootstrap/nomad/roles/nomad_client/templates/client.hcl.j2"
 check "client introduction is left at its default" bash -c "! grep -rq client_introduction '$ROOT/bootstrap/nomad/roles'"
 
+ROLES="$ROOT/bootstrap/nomad/roles"
+COMMON="$ROLES/common/tasks/main.yml"
+# Packages an apt task in a role file leaves in the given state.
+role_packages() {
+  awk -v want="$2" '
+    function flush(  i) { if (in_apt && state == want) for (i = 1; i <= n; i++) print pkgs[i] }
+    /^- name:/ { flush(); in_apt = 0; n = 0; state = ""; next }
+    /^  (ansible\.builtin\.)?apt:/ { in_apt = 1; next }
+    in_apt && /^    name: [^[:space:]]/ { pkgs[++n] = $2 }
+    in_apt && /^      - / { pkgs[++n] = $2 }
+    in_apt && /^    state:/ { state = $2 }
+    END { flush() }
+  ' "$1"
+}
+mapfile -t COMMON_PKGS < <(role_packages "$COMMON" present)
+check "common installs ca-certificates for https apt sources" \
+  bash -c "printf '%s\n' ${COMMON_PKGS[*]} | grep -qx ca-certificates"
+check "common installs nomad" bash -c "printf '%s\n' ${COMMON_PKGS[*]} | grep -qx nomad"
+no_role_removes_common_packages() {
+  local removed pkg
+  removed="$(role_packages "$ROLES/nomad_server/tasks/main.yml" absent; role_packages "$ROLES/nomad_client/tasks/main.yml" absent)"
+  [[ -n "$removed" ]] || return 1
+  for pkg in "${COMMON_PKGS[@]}"; do
+    if grep -qx -- "$pkg" <<<"$removed"; then
+      echo "a role removes ${pkg}, which common installs" >&2
+      return 1
+    fi
+  done
+}
+check "server role still removes docker" \
+  bash -c "grep -qx docker-ce <<<'$(role_packages "$ROLES/nomad_server/tasks/main.yml" absent)'"
+check "no role removes a package common installs" no_role_removes_common_packages
+
 POL="$ROOT/nomad_acl/policies"
 policies_lack() { ! grep -hv '^[[:space:]]*#' "$POL"/*.hcl | grep -Eq "$1"; }
 check "no anonymous policy" test ! -e "$POL/anonymous.hcl"
