@@ -59,7 +59,8 @@
       changed_when: false
       failed_when: >-
         hashicorp_key_info.rc != 0 or
-        hashicorp_key_info.stdout_lines | select('match', 'pub:') | list | length == 0
+        hashicorp_key_info.stdout_lines | select('match', 'pub:') | list
+        | length == 0
 
     - name: Install the HashiCorp apt keyring
       ansible.builtin.copy:
