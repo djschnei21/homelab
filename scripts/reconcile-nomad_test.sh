@@ -477,6 +477,123 @@ electrs_gw_key_from_file() {
 }
 check "electrs-gw reads its auth key from a secrets file" electrs_gw_key_from_file
 
+warm_proxy_matches() {
+  local render_port gw_port
+  render_port="$(sed -n 's/^WARM_PROXY = ("127.0.0.1", \([0-9]*\))$/\1/p' "$TS")"
+  gw_port="$(sed -n 's/.*--outbound-http-proxy-listen=127.0.0.1:\([0-9]*\).*/\1/p' "$TS")"
+  [[ -n "$render_port" && "$render_port" == "$gw_port" ]]
+}
+check "render warms through electrs-gw's proxy port" warm_proxy_matches
+
+WARM_DIR="$TMP/warm"
+mkdir -p "$WARM_DIR"
+awk '
+  /^[[:space:]]*task[[:space:]]+"/ { in_render = ($0 ~ /"render"/) }
+  in_render && /<<EOF$/ { in_data = 1; next }
+  in_data && /^EOF$/ { exit }
+  in_data { print }
+' "$TS" | sed 's/\$\${/${/g' >"$WARM_DIR/render.py"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
+  -subj /CN=warm-test -addext 'subjectAltName=DNS:*.example.ts.net' \
+  -keyout "$WARM_DIR/key.pem" -out "$WARM_DIR/cert.pem" >/dev/null 2>&1
+
+# Runs render.py's warm-up against a local CONNECT proxy and TLS server. "up"
+# trusts the server cert, "untrusted" does not, and "down" has no proxy.
+warm_case() {
+  TS_TAILNET=example.ts.net timeout 30 python3 - "$WARM_DIR" "$1" <<'PY'
+import importlib.util, os, socket, ssl, sys, threading
+
+d, mode = sys.argv[1], sys.argv[2]
+if mode != "untrusted":
+    os.environ["SSL_CERT_FILE"] = f"{d}/cert.pem"
+spec = importlib.util.spec_from_file_location("render", f"{d}/render.py")
+r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(r)
+seen = []
+
+def listener():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen()
+    return s
+
+tls = listener()
+sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+sctx.load_cert_chain(f"{d}/cert.pem", f"{d}/key.pem")
+sctx.sni_callback = lambda sock, name, ctx: seen.append(f"sni {name}")
+
+def serve_tls():
+    while True:
+        c, _ = tls.accept()
+        try:
+            sctx.wrap_socket(c, server_side=True).close()
+        except OSError:
+            c.close()
+
+def pipe(a, b):
+    try:
+        while data := a.recv(65536):
+            b.sendall(data)
+        b.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+
+proxy = listener()
+
+def serve_proxy():
+    while True:
+        c, _ = proxy.accept()
+        buf = b""
+        while b"\r\n\r\n" not in buf and (chunk := c.recv(4096)):
+            buf += chunk
+        seen.append(buf.split(b"\r\n", 1)[0].decode())
+        u = socket.create_connection(tls.getsockname())
+        c.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
+        threading.Thread(target=pipe, args=(c, u), daemon=True).start()
+        threading.Thread(target=pipe, args=(u, c), daemon=True).start()
+
+threading.Thread(target=serve_tls, daemon=True).start()
+threading.Thread(target=serve_proxy, daemon=True).start()
+closed = listener()
+r.WARM_PROXY = closed.getsockname() if mode == "down" else proxy.getsockname()
+closed.close()
+r.WARM_RETRY = 0.05
+r.WARM_SECONDS = 5 if mode == "up" else 1
+r.svc = lambda name, ns="default": ("10.0.0.1", 8080)
+caddy, _ = r.render()
+for t in r.start_warm(caddy):
+    t.join(15)
+    if t.is_alive():
+        print("warm thread still running")
+for line in sorted(seen):
+    print(line)
+PY
+}
+
+warm_up_ok() {
+  local out site
+  out="$(warm_case up)"
+  for site in alby grafana mempool prometheus; do
+    if ! grep -qx "warmed ${site}" <<<"$out" ||
+      ! grep -qx "CONNECT ${site}.example.ts.net:443 HTTP/1.1" <<<"$out" ||
+      ! grep -qx "sni ${site}.example.ts.net" <<<"$out"; then
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+  done
+}
+warm_gives_up() {
+  local out
+  out="$(warm_case "$1")"
+  if [[ "$(grep -c '^warm failed ' <<<"$out")" != 4 ]] || grep -q -e '^warmed ' -e 'still running' <<<"$out"; then
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+}
+check "render warms every site through the proxy" warm_up_ok
+check "render warm-up rejects an untrusted cert" warm_gives_up untrusted
+check "render warm-up gives up when the proxy is down" warm_gives_up down
+
 # Body of a workflow step's `run: |` block, dedented.
 workflow_step_script() {
   awk -v step="$2" '
