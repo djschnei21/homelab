@@ -6,7 +6,7 @@ Run them by hand from the repo root, with `NOMAD_ADDR` and a storage-admin token
 
 `csi-scratch.hcl` is the Phase 4 ext4 volume (1 GiB). Create it with `scripts/nomad-volume-create.sh`. The six specs under `nomad_volumes/iscsi/` already have their preflight `capacity_min` (and the same `capacity_max`).
 
-`holder.nomad.hcl` is a non-root task (`65534:65534`) that writes `/data/marker` once and appends `/data/visits`. The fresh ext4 root is owned by root, so chown the mount to `65534:65534` before the holder (the copy job can do that). `-var shutdown_delay_seconds=180` sleeps in the SIGTERM trap. `kill_timeout` is that delay plus 15 seconds, which needs the client `max_kill_timeout` from the client-prep PR before a 3 minute drain proof. `-var fence=true` adds `disconnect { lost_after = "12h", replace = false, reconcile = "keep_original" }`. `-var target_node=pinode3` pins the alloc. Do not drain a client to move it.
+`holder.nomad.hcl` chowns the mount root to `65534:65534` in a non-sidecar prestart, then a `65534` task writes `/data/marker` once and appends `/data/visits`. A fresh ext4 root is `root:root` `0755`, so the writer cannot create the marker until that chown. `-var shutdown_delay_seconds=180` sleeps in the SIGTERM trap. The trap is armed around `sleep 3600 & wait $!`, so the signal is not stuck behind an hour of foreground sleep. `kill_timeout` is that delay plus 15 seconds, which needs the client `max_kill_timeout` from the client-prep PR before a 3 minute drain proof. `-var fence=true` adds `disconnect { lost_after = "12h", replace = false, reconcile = "keep_original" }`. `-var target_node=pinode3` pins the alloc. Do not drain a client to move it.
 
 `copy-volume.nomad.hcl` claims `source_volume` read-only (`multi-node-single-writer` by default, so pass 1 can run beside the live writer) and `dest_volume` read-write. It runs:
 
@@ -14,7 +14,7 @@ Run them by hand from the repo root, with `NOMAD_ADDR` and a storage-admin token
 rsync -aH --numeric-ids --delete --exclude=/lost+found --chown=<uid>:<gid>
 ```
 
-from `instrumentisto/rsync-ssh:alpine3.23-r3`. `-var verify=true` is `--dry-run --itemize-changes` and exits non-zero if rsync lists anything. `-var checksum=true` adds `--checksum` on that dry run. `-var dest_subdir=data` copies into that directory so Prometheus can keep its TSDB off `lost+found`. `-var 'extra_excludes=["/bitcoin-data"]'` adds excludes; the chain source has a stale `bitcoin-data` directory at its root.
+from `instrumentisto/rsync-ssh:alpine3.23-r3`. `-var verify=true` is `--dry-run --itemize-changes` and exits non-zero if rsync lists anything. `-var checksum=true` adds `--checksum` on that dry run. `-var dest_subdir=data` copies into that directory so Prometheus can keep its TSDB off `lost+found`. `-var 'extra_excludes=["/bitcoin-data"]'` adds excludes. Patterns are joined with commas for the task env, so a pattern cannot contain a comma or start with a dash. The chain source has a stale `bitcoin-data` directory at its root.
 
 Owners and the commands for each cutover, from the repo root:
 

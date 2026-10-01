@@ -143,7 +143,12 @@ uid=$(id -u)
 gid=$(id -g)
 
 run_copy() {
-  local rc
+  local rc exclude_count
+  if [[ -n ${EXTRA_EXCLUDES:-} ]]; then
+    exclude_count=${EXTRA_EXCLUDE_COUNT:-1}
+  else
+    exclude_count=${EXTRA_EXCLUDE_COUNT:-0}
+  fi
   set +e
   if [[ $USE_SUDO == 1 ]]; then
     sudo -n -E \
@@ -151,12 +156,14 @@ run_copy() {
       CHOWN="${CHOWN:-${uid}:${gid}}" DEST_SUBDIR="${DEST_SUBDIR:-}" \
       VERIFY="${VERIFY:-false}" CHECKSUM="${CHECKSUM:-false}" \
       EXTRA_EXCLUDES="${EXTRA_EXCLUDES:-}" \
+      EXTRA_EXCLUDE_COUNT="$exclude_count" \
       /bin/sh /tmp/copy-volume.sh >"$WORK/out" 2>"$WORK/err"
   else
     SRC_DIR="$WORK/src" DEST_DIR="$WORK/dest" \
       CHOWN="${CHOWN:-${uid}:${gid}}" DEST_SUBDIR="${DEST_SUBDIR:-}" \
       VERIFY="${VERIFY:-false}" CHECKSUM="${CHECKSUM:-false}" \
       EXTRA_EXCLUDES="${EXTRA_EXCLUDES:-}" \
+      EXTRA_EXCLUDE_COUNT="$exclude_count" \
       /bin/sh /tmp/copy-volume.sh >"$WORK/out" 2>"$WORK/err"
   fi
   rc=$?
@@ -215,6 +222,7 @@ check "other chain files are copied" test -f "$WORK/dest/blocks/blk"
 check "chown with a flag is refused" assert_eq "$(CHOWN='--delete' VERIFY=false DEST_SUBDIR= EXTRA_EXCLUDES= run_copy)" "1"
 check "a parent dest subdir is refused" assert_eq "$(VERIFY=false DEST_SUBDIR=../x EXTRA_EXCLUDES= run_copy)" "1"
 check "an exclude flag is refused" assert_eq "$(VERIFY=false DEST_SUBDIR= EXTRA_EXCLUDES=--delete run_copy)" "1"
+check "an exclude comma is refused" assert_eq "$(VERIFY=false DEST_SUBDIR= EXTRA_EXCLUDES='/a,/b' EXTRA_EXCLUDE_COUNT=1 run_copy)" "1"
 
 if command -v shellcheck >/dev/null 2>&1; then
   check "copy script is shellcheck clean" shellcheck /tmp/copy-volume.sh

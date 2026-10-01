@@ -85,7 +85,10 @@ check "scratch is outside nomad_jobs" bash -c "[[ '$SCRATCH' != *nomad_jobs* ]]"
 check "scratch is not a placeholder" lacks "$SCRATCH" "CAPACITY_PLACEHOLDER"
 check "scratch has no secrets" lacks "$SCRATCH" "secrets"
 check "holder is outside nomad_jobs" test -f "$ROOT/tests/storage/holder.nomad.hcl"
-check "holder runs as non-root" grep -q '65534:65534' "$ROOT/tests/storage/holder.nomad.hcl"
+check "holder runs as non-root" grep -Eq 'user[[:space:]]+= "65534:65534"' "$ROOT/tests/storage/holder.nomad.hcl"
+check "holder prestart chowns the mount" grep -q 'chown 65534:65534 /data' "$ROOT/tests/storage/holder.nomad.hcl"
+check "holder prestart is not a sidecar" grep -q 'sidecar = false' "$ROOT/tests/storage/holder.nomad.hcl"
+check "holder waits in the background" grep -q 'sleep 3600 &' "$ROOT/tests/storage/holder.nomad.hcl"
 check "copy job is outside nomad_jobs" test -f "$ROOT/tests/storage/copy-volume.nomad.hcl"
 check "copy job is batch" grep -Eq 'type[[:space:]]+= "batch"' "$ROOT/tests/storage/copy-volume.nomad.hcl"
 check "copy job pins an rsync image" grep -q 'instrumentisto/rsync-ssh:alpine3.23-r3' "$ROOT/tests/storage/copy-volume.nomad.hcl"
@@ -93,6 +96,8 @@ check "copy job uses the cutover rsync flags" \
   grep -q 'rsync -aH --numeric-ids --delete --exclude=/lost+found --chown=' "$ROOT/tests/storage/copy-volume.nomad.hcl"
 check "copy job can exclude the stale chain subtree" \
   grep -q 'extra_excludes' "$ROOT/tests/storage/copy-volume.nomad.hcl"
+check "copy job joins excludes with commas" \
+  grep -q 'join(",", var.extra_excludes)' "$ROOT/tests/storage/copy-volume.nomad.hcl"
 check "readme lists the cutover owners" bash -c 'grep -q "65534:65534" "$1" && grep -q "472:0" "$1" && grep -q "chown=0:0" "$1" && grep -q "3001:3001" "$1" && grep -q "/bitcoin-data" "$1"' bash "$ROOT/tests/storage/README.md"
 check "storage readme says why these jobs are not reconciled" \
   grep -q 'nomad_jobs' "$ROOT/tests/storage/README.md"

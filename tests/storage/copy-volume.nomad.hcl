@@ -86,7 +86,8 @@ job "copy-volume" {
         DEST_SUBDIR = var.dest_subdir
         VERIFY         = format("%t", var.verify)
         CHECKSUM       = format("%t", var.checksum)
-        EXTRA_EXCLUDES = join("\n", var.extra_excludes)
+        EXTRA_EXCLUDES      = join(",", var.extra_excludes)
+        EXTRA_EXCLUDE_COUNT = length(var.extra_excludes)
       }
 
       volume_mount {
@@ -138,17 +139,28 @@ if [ -n "$DEST_SUBDIR" ]; then
 fi
 
 excludes=$${EXTRA_EXCLUDES:-}
+exclude_count=$${EXTRA_EXCLUDE_COUNT:-0}
 set -- rsync -aH --numeric-ids --delete --exclude=/lost+found --chown="$CHOWN"
-if [ -n "$excludes" ]; then
-  while IFS= read -r pat; do
-    [ -n "$pat" ] || continue
+if [ -n "$excludes" ] || [ "$exclude_count" != 0 ]; then
+  n=0
+  set -f
+  old_ifs=$IFS
+  IFS=,
+  for pat in $excludes; do
+    n=$((n + 1))
     case "$pat" in
-      -*) echo "exclude must not be a flag" >&2; exit 1 ;;
+      ""|*,*) echo "exclude must not contain a comma" >&2; IFS=$old_ifs; set +f; exit 1 ;;
+      -*) echo "exclude must not start with a dash" >&2; IFS=$old_ifs; set +f; exit 1 ;;
     esac
     set -- "$@" --exclude="$pat"
-  done <<EXCLUDES
-$excludes
-EXCLUDES
+  done
+  IFS=$old_ifs
+  set +f
+  # A comma inside a pattern splits into more fields than the list had.
+  if [ "$n" != "$exclude_count" ]; then
+    echo "exclude must not contain a comma" >&2
+    exit 1
+  fi
 fi
 set -- "$@" "$src/" "$dest/"
 if [ "$VERIFY" = true ]; then
