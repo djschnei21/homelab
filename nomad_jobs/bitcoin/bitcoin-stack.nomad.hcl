@@ -38,21 +38,35 @@ job "bitcoin-stack" {
     task "bitcoind" {
       driver = "docker"
 
+      # nomadVar renders in templates only, and bitcoind accepts rpcauth as a flag.
+      template {
+        destination = "${NOMAD_SECRETS_DIR}/rpc.env"
+        env         = true
+        data        = <<EOT
+rpcauth={{ with nomadVar "nomad/jobs/bitcoin-stack/bitcoind" }}{{ .rpcauth }}{{ end }}
+EOT
+      }
+
       config {
         image = "bitcoin/bitcoin:31.1"
 
-        entrypoint = ["bitcoind"]
-
-        args = [
-          "-datadir=/data",
-          "-server=1",
-          "-txindex=1",
-          "-rpcbind=0.0.0.0",
-          "-rpcport=8332",
-          "-rpcallowip=0.0.0.0/0",
-          "-rpcauth=mempool:wah8FSNZimOwaVjk$778fbe16ffc1f389e22cf5034c8aacab284226e50974800be4d4c637a57a3a77",
-          "-port=8333",
-          "-printtoconsole"
+        entrypoint = ["sh", "-c"]
+        args = [<<EOS
+if [ -z "$rpcauth" ]; then
+  echo "bitcoind rpcauth is not set" >&2
+  exit 1
+fi
+exec bitcoind \
+  -datadir=/data \
+  -server=1 \
+  -txindex=1 \
+  -rpcbind=0.0.0.0 \
+  -rpcport=8332 \
+  -rpcallowip=0.0.0.0/0 \
+  -rpcauth="$rpcauth" \
+  -port=8333 \
+  -printtoconsole
+EOS
         ]
 
         ports = ["bitcoin_rpc", "bitcoin_p2p"]
@@ -321,11 +335,18 @@ EOF
         ports = ["mariadb"]
       }
 
+      template {
+        destination = "${NOMAD_SECRETS_DIR}/env.txt"
+        env         = true
+        data        = <<EOT
+MYSQL_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/mariadb" }}{{ .MYSQL_PASSWORD }}{{ end }}
+MYSQL_ROOT_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/mariadb" }}{{ .MYSQL_ROOT_PASSWORD }}{{ end }}
+EOT
+      }
+
       env {
-        MYSQL_DATABASE      = "mempool"
-        MYSQL_USER          = "mempool"
-        MYSQL_PASSWORD      = "mempool"
-        MYSQL_ROOT_PASSWORD = "mempool_root"
+        MYSQL_DATABASE = "mempool"
+        MYSQL_USER     = "mempool"
       }
 
       resources {
@@ -357,6 +378,15 @@ EOF
         env         = true
       }
 
+      # This path already stores DATABASE_PASSWORD next to rpc_user and rpc_password.
+      template {
+        destination = "${NOMAD_SECRETS_DIR}/db.env"
+        env         = true
+        data        = <<EOT
+DATABASE_PASSWORD={{ with nomadVar "nomad/jobs/bitcoin-stack/backend" }}{{ .DATABASE_PASSWORD }}{{ end }}
+EOT
+      }
+
       config {
         image = "mempool/backend:v3.3.1"
         ports = ["backend"]
@@ -371,7 +401,6 @@ EOF
         DATABASE_PORT        = "3306"
         DATABASE_DATABASE    = "mempool"
         DATABASE_USERNAME    = "mempool"
-        DATABASE_PASSWORD    = "mempool"
         STATISTICS_ENABLED   = "true"
       }
 
