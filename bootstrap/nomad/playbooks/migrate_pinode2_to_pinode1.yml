@@ -1,7 +1,12 @@
 ---
+# nomad runs on the server host, so the controller's NOMAD_TOKEN is handed to
+# the remote task environment. Export a management token: ci-patch has no
+# operator read for raft list-peers.
 - name: Pre-flight migration health checks
   hosts: nomad_servers
   become: false
+  environment:
+    NOMAD_TOKEN: "{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}"
   tasks:
     - name: Capture Nomad server membership before apply
       ansible.builtin.command: nomad server members
@@ -37,6 +42,8 @@
 - name: Post-flight migration health checks
   hosts: nomad_servers
   become: false
+  environment:
+    NOMAD_TOKEN: "{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}"
   tasks:
     - name: Capture Nomad server membership after apply
       ansible.builtin.command: nomad server members
