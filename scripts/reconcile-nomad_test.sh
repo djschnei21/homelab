@@ -635,6 +635,25 @@ check "client introduction is left at its default" bash -c "! grep -rq client_in
 
 ROLES="$ROOT/bootstrap/nomad/roles"
 COMMON="$ROLES/common/tasks/main.yml"
+check "HashiCorp key has no creates guard" bash -c "! grep -v '^[[:space:]]*#' '$COMMON' | grep -q 'creates:'"
+check "HashiCorp key is downloaded on every run" awk '
+  /ansible.builtin.get_url:/ { in_get = 1; next }
+  in_get && /url: https:\/\/apt.releases.hashicorp.com\/gpg$/ { found = 1 }
+  in_get && /^[[:space:]]*- name:/ { in_get = 0 }
+  /^[[:space:]]*(when|creates):/ && in_get { bad = 1 }
+  END { exit !(found && !bad) }
+' "$COMMON"
+keyring_dest="$(awk '/- name: Install the HashiCorp apt keyring/ { f = 1 } f && /dest:/ { print $2; exit }' "$COMMON")"
+check "HashiCorp keyring is installed with copy" assert_eq "$keyring_dest" "/usr/share/keyrings/hashicorp-archive-keyring.gpg"
+check "HashiCorp repo is signed by the refreshed keyring" \
+  assert_eq "$(awk '/signed_by:/ { print $2; exit }' "$COMMON")" "$keyring_dest"
+check "HashiCorp download must hold a public key before it is installed" awk '
+  /- name: Check the HashiCorp download holds a public key/ { checking = 1 }
+  checking && /select\(.match., .pub:.\)/ { checked = 1 }
+  /- name: Install the HashiCorp apt keyring/ { exit !checked }
+  END { exit !checked }
+' "$COMMON"
+
 # Packages an apt task in a role file leaves in the given state.
 role_packages() {
   awk -v want="$2" '
