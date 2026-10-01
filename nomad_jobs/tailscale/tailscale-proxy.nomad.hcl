@@ -265,8 +265,8 @@ electrs_target() {
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       # Doubled dollar is HCL escaping. The shell sees one dollar.
-      ELECTRS_HOST=*) _host="$$${line#ELECTRS_HOST=}" ;;
-      ELECTRS_PORT=*) _port="$$${line#ELECTRS_PORT=}" ;;
+      ELECTRS_HOST=*) _host="$${line#ELECTRS_HOST=}" ;;
+      ELECTRS_PORT=*) _port="$${line#ELECTRS_PORT=}" ;;
     esac
   done < /alloc/electrs.env
   case "$_host" in
