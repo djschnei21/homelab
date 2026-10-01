@@ -1,0 +1,39 @@
+name: Test
+
+# GitHub-hosted only. This runs pull request code, and the homelab runner
+# holds Nomad tokens. No secrets are passed.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run repo tests
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tests=(scripts/*_test.sh)
+          if [[ ${#tests[@]} -eq 0 ]]; then
+            echo "::error::no scripts/*_test.sh found"
+            exit 1
+          fi
+          rc=0
+          for t in "${tests[@]}"; do
+            echo "== ${t}"
+            bash "$t" || rc=1
+          done
+          exit "$rc"
