@@ -464,6 +464,19 @@ check "electrs-gw serves the rendered upstream" \
   assert_eq "$(electrs_target_for $'ELECTRS_HOST=192.168.68.61\nELECTRS_PORT=50001\n')" "tcp://192.168.68.61:50001"
 check "electrs-gw rejects a host with shell syntax" electrs_rejects $'ELECTRS_HOST=$(id)\nELECTRS_PORT=50001\n'
 
+electrs_gw_key_from_file() {
+  local script
+  script="$(electrs_gw_script)"
+  [[ "$script" == *'--auth-key="file:$NOMAD_SECRETS_DIR/ts_authkey"'* && "$script" != *TS_AUTHKEY* ]] || return 1
+  awk '
+    /^[[:space:]]*task[[:space:]]+"/ { in_gw = ($0 ~ /"electrs-gw"/) }
+    in_gw && /^[[:space:]]*destination[[:space:]]*=/ && index($0, "\"${NOMAD_SECRETS_DIR}/ts_authkey\"") { found = 1 }
+    in_gw && /^[[:space:]]*env[[:space:]]*=[[:space:]]*true/ { bad = 1 }
+    END { exit (bad || !found) }
+  ' "$TS"
+}
+check "electrs-gw reads its auth key from a secrets file" electrs_gw_key_from_file
+
 # Body of a workflow step's `run: |` block, dedented.
 workflow_step_script() {
   awk -v step="$2" '
