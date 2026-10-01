@@ -2,7 +2,7 @@
 
 These files stay out of `nomad_jobs/`. Reconcile submits every `nomad_jobs/**/*.nomad.hcl` on main. A holder or a copy job there would be planned on every reconcile, including while a cutover has a group scaled to zero.
 
-Run them by hand from the repo root, with `NOMAD_ADDR` and a storage-admin token.
+Run them by hand from the repo root. Submit the copy and holder jobs with the bootstrap token. `storage-admin` creates volumes, scales groups to 0, and stops allocations. It cannot submit jobs: a submitted job's workload identity reads every variable at `nomad/jobs/<job>/<group>/<task>`.
 
 `csi-scratch.hcl` is the Phase 4 ext4 volume (1 GiB). Create it with `scripts/nomad-volume-create.sh`. The six specs under `nomad_volumes/iscsi/` already have their preflight `capacity_min` (and the same `capacity_max`).
 

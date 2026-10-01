@@ -1041,20 +1041,18 @@ else
 fi
 
 POL="$ROOT/nomad_acl/policies"
-# storage-admin.hcl is the migration token. It is allowed the volume, scale,
-# and variable rights the CI tokens are refused.
+# storage-admin scales and creates volumes. It cannot submit jobs: a submitted
+# job's workload identity would read every variable under nomad/jobs/.
 ci_policies_lack() {
   ! grep -hv '^[[:space:]]*#' "$POL/ci-reconcile.hcl" "$POL/ci-patch.hcl" | grep -Eq "$1"
 }
 check "no anonymous policy" test ! -e "$POL/anonymous.hcl"
-check "policies grant no variable access" ci_policies_lack 'variables'
+check "policies grant no variable access" bash -c "! grep -hv '^[[:space:]]*#' '$POL'/*.hcl | grep -q variables"
 check "policies grant no broad job rights" ci_policies_lack 'submit-job|alloc-exec|alloc-lifecycle|read-fs|csi-write-volume|management'
 SA="$POL/storage-admin.hcl"
-check "storage-admin variable paths" assert_eq \
-  "$(grep -E '^[[:space:]]*path "' "$SA" | sed 's/^[[:space:]]*//')" \
-  $'path "nomad/jobs/democratic-csi-iscsi-controller/controller/plugin" {\npath "nomad/jobs/bitcoin-stack/bitcoin/bitcoind" {\npath "nomad/jobs/bitcoin-stack/electrs/electrs" {'
 check "storage-admin tokens are 24h" grep -q -- '-ttl=24h' "$SA"
-for cap in list-jobs read-job plan-job register-job scale-job read-job-scaling alloc-lifecycle read-logs csi-write-volume csi-read-volume csi-list-volume csi-mount-volume; do
+check "storage-admin cannot submit jobs" bash -c "! grep -Eq '\"(plan-job|register-job|submit-job)\"' '$SA'"
+for cap in list-jobs read-job scale-job read-job-scaling alloc-lifecycle read-logs csi-write-volume csi-read-volume csi-list-volume csi-mount-volume; do
   check "storage-admin ${cap} in both namespaces" assert_eq "$(grep -c "\"${cap}\"" "$SA")" "2"
 done
 check "storage-admin does not register plugins" bash -c "! grep -q csi-register-plugin '$SA'"

@@ -1,4 +1,10 @@
-# Token for iSCSI volume create, the copy job, scale-down, and alloc stop.
+# This token creates volumes, scales groups to 0, and stops allocations.
+# It cannot submit jobs, because a submitted job's workload identity reads
+# every variable at nomad/jobs/<job>/<group>/<task>. The copy and holder
+# jobs are submitted with the bootstrap token for that reason. The controller
+# key and the bitcoind and electrs items are written with the bootstrap token
+# too.
+#
 # Apply with the bootstrap token. Mint a 24h token per session. Do not write
 # that secret into a workflow file.
 #
@@ -6,15 +12,12 @@
 #   nomad acl token create -name storage-admin -type client -ttl=24h \
 #     -policy storage-admin -t '{{ .SecretID }}'
 #
-# Variable write is only the controller API key and the bitcoind and electrs
-# items Phase 5 updates. nomad job scale also checks read-job-scaling.
+# nomad job scale also checks read-job-scaling.
 
 namespace "default" {
   capabilities = [
     "list-jobs",
     "read-job",
-    "plan-job",
-    "register-job",
     "scale-job",
     "read-job-scaling",
     "alloc-lifecycle",
@@ -24,20 +27,12 @@ namespace "default" {
     "csi-list-volume",
     "csi-mount-volume",
   ]
-
-  variables {
-    path "nomad/jobs/democratic-csi-iscsi-controller/controller/plugin" {
-      capabilities = ["write", "read", "list", "destroy"]
-    }
-  }
 }
 
 namespace "bitcoin" {
   capabilities = [
     "list-jobs",
     "read-job",
-    "plan-job",
-    "register-job",
     "scale-job",
     "read-job-scaling",
     "alloc-lifecycle",
@@ -47,16 +42,6 @@ namespace "bitcoin" {
     "csi-list-volume",
     "csi-mount-volume",
   ]
-
-  variables {
-    path "nomad/jobs/bitcoin-stack/bitcoin/bitcoind" {
-      capabilities = ["write", "read", "list", "destroy"]
-    }
-
-    path "nomad/jobs/bitcoin-stack/electrs/electrs" {
-      capabilities = ["write", "read", "list", "destroy"]
-    }
-  }
 }
 
 plugin {
