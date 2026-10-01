@@ -4,6 +4,9 @@ name: Confirm hosts after patch
 # queued before that reboot. While a shutdown is still scheduled it queues the
 # next attempt, so the attempt that runs after boot is the one that decides
 # whether Nomad is ready. A GitHub-hosted runner cannot see the Pis.
+# The patch job queues this only when the runner is the Nomad server host.
+# Otherwise the playbook reboots the server in-band and the patch job's own
+# readiness check is the post-boot check.
 
 on:
   workflow_dispatch:
@@ -26,11 +29,16 @@ jobs:
     runs-on: [self-hosted, homelab]
     env:
       NOMAD_ADDR: http://192.168.68.65:4646
+      # The CLI appends Web UI hint lines to table output.
+      NOMAD_CLI_SHOW_HINTS: "0"
       # Not a default Actions variable. set -u would abort the requeue.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Passed as data. Interpolating the input into the script is shell on this runner.
       RECHECK_ATTEMPT: ${{ github.event.inputs.attempt || '0' }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       # The file holds only the ci-patch secret (nomad_acl/policies/).
       # No file means ACLs are still off, so the check goes on without a token.
       - name: Load Nomad token
@@ -77,24 +85,9 @@ jobs:
             sleep 50
             exit 0
           fi
-          # Clients rejoin for a while after the server boots. A header with no
-          # node rows is not a healthy cluster; pinode2-4 must be listed and ready.
-          status_out="$(mktemp)"
-          ready=0
-          for _ in $(seq 1 18); do
-            if timeout 15 nomad node status -no-color >"$status_out" 2>&1 \
-              && awk 'NR>1 && NF { n++; if ($NF != "ready") bad = 1 } END { exit !(n >= 3 && !bad) }' "$status_out"; then
-              ready=1
-              break
-            fi
-            sleep 10
-          done
-          while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            echo "::notice::${line}"
-          done <"$status_out"
-          rm -f "$status_out"
-          if [[ "$ready" -eq 1 ]]; then
+          # Clients rejoin for a while after the server boots. An empty node
+          # list is not a healthy cluster; three clients must be listed and ready.
+          if "${GITHUB_WORKSPACE}/scripts/nomad-nodes-ready.py" --min 3 --attempts 18 --delay 10 --timeout 15; then
             echo "::notice::all nomad nodes ready after patch"
           else
             echo "::error::a nomad node is not ready after patch"

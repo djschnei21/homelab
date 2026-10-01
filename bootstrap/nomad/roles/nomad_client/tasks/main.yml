@@ -35,12 +35,12 @@
       - python3-debian
     state: present
 
-- name: Add Docker GPG key
-  ansible.builtin.shell: >
-    curl -fsSL https://download.docker.com/linux/debian/gpg |
-    gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-  args:
-    creates: /usr/share/keyrings/docker-archive-keyring.gpg
+- name: Refresh the Docker apt signing key
+  ansible.builtin.import_tasks: ../../common/tasks/apt_keyring.yml
+  vars:
+    apt_keyring_url: "{{ docker_apt_key_url }}"
+    apt_keyring_path: "{{ docker_apt_keyring }}"
+    apt_keyring_fingerprints: "{{ docker_apt_key_fingerprints }}"
 
 - name: Remove legacy Docker apt repository list
   ansible.builtin.file:
@@ -60,7 +60,7 @@
       - stable
     architectures:
       - "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else ansible_facts['architecture'] }}"
-    signed_by: /usr/share/keyrings/docker-archive-keyring.gpg
+    signed_by: "{{ docker_apt_keyring }}"
     install_python_debian: true
     state: present
 

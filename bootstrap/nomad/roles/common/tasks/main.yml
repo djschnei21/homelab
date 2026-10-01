@@ -1,20 +1,21 @@
 ---
+# ca-certificates: the key download and apt both reach HashiCorp over https.
 - name: Install prerequisite packages
   apt:
     name:
-      - wget
+      - ca-certificates
       - gpg
       - cgroup-tools
       - nfs-common
       - python3-debian
     state: present
 
-- name: Add HashiCorp GPG key (if not already present)
-  ansible.builtin.shell: >
-    wget -O - https://apt.releases.hashicorp.com/gpg |
-    gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-  args:
-    creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+- name: Refresh the HashiCorp apt signing key
+  ansible.builtin.import_tasks: apt_keyring.yml
+  vars:
+    apt_keyring_url: "{{ hashicorp_apt_key_url }}"
+    apt_keyring_path: "{{ hashicorp_apt_keyring }}"
+    apt_keyring_fingerprints: "{{ hashicorp_apt_key_fingerprints }}"
 
 - name: Remove legacy HashiCorp apt repository list
   ansible.builtin.file:
@@ -34,7 +35,7 @@
       - main
     architectures:
       - arm64
-    signed_by: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    signed_by: "{{ hashicorp_apt_keyring }}"
     install_python_debian: true
     state: present
 

@@ -318,6 +318,7 @@ check "workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646'
 check "workflow comment tracks deployment" grep -q 'until the deployment succeeds' "$WF"
 check "workflow shares the cluster lock" grep -q 'group: homelab-cluster' "$WF"
 check "workflow records registered tasks" grep -q 'RECONCILE_STATUS: "1"' "$WF"
+check "workflow turns off nomad CLI hints" grep -q 'NOMAD_CLI_SHOW_HINTS: "0"' "$WF"
 
 PATCH="$ROOT/.github/workflows/patch-infra.yml"
 check "patch workflow has no pull_request" bash -c "! grep -q pull_request '$PATCH'"
@@ -331,7 +332,7 @@ check "patch ssh keeps host key checking" bash -c "! grep -q 'StrictHostKeyCheck
 check "patch workflow passes the actions token" grep -q 'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}' "$PATCH"
 check "patch playbook creates the result directory" grep -q 'state: directory' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "patch workflow does not run on push" bash -c "! grep -Eq '^[[:space:]]*push:' '$PATCH'"
-check "patch workflow reports node status" grep -q 'nomad node status -no-color' "$PATCH"
+check "patch workflow reports node status" grep -q 'scripts/nomad-nodes-ready.py' "$PATCH"
 check "patch workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$PATCH"
 check "patch workflow fails if a node is not ready" grep -q 'a nomad node is not ready after patch' "$PATCH"
 check "patch workflow publishes per-host results" grep -q 'homelab-patch-results' "$PATCH"
@@ -369,8 +370,8 @@ check "post-reboot check stays on the homelab runner" bash -c "! grep -q 'ubuntu
 check "post-reboot check requeues while reboot is scheduled" grep -q 'requeued Nomad recheck attempt' "$READY"
 check "post-reboot check uses nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646' "$READY"
 check "post-reboot check shares the cluster lock" grep -q 'group: homelab-cluster' "$READY"
-check "post-reboot check waits for three clients" grep -q 'n >= 3' "$READY"
-check "patch workflow requires three ready clients" grep -q 'n >= 3' "$PATCH"
+check "post-reboot check waits for three clients" grep -q 'nomad-nodes-ready.py" --min 3 ' "$READY"
+check "patch workflow requires three ready clients" grep -q 'nomad-nodes-ready.py" --min 3 ' "$PATCH"
 check "patch workflow defers the runner reboot" grep -q 'patch_defer_runner_reboot=true' "$PATCH"
 check "patch workflow reboots the runner after the readiness check" awk '
   /a nomad node is not ready after patch/ { failed = 1 }
@@ -378,14 +379,50 @@ check "patch workflow reboots the runner after the readiness check" awk '
   /shutdown -r \+1/ { if (!dispatched) exit 1; found = 1 }
   END { exit !(failed && dispatched && found) }
 ' "$PATCH"
-check "patch workflow bounds the nomad status call" grep -q 'timeout 15 nomad node status -no-color' "$PATCH"
-check "post-reboot check bounds the nomad status call" grep -q 'timeout 15 nomad node status -no-color' "$READY"
+check "patch workflow bounds the nomad status call" grep -q 'nomad-nodes-ready.py" .*--timeout 15' "$PATCH"
+check "post-reboot check bounds the nomad status call" grep -q 'nomad-nodes-ready.py" .*--timeout 15' "$READY"
+check "patch workflow waits for clients after an in-band server reboot" grep -q 'nomad-nodes-ready.py" .*--attempts 18' "$PATCH"
+check "post-reboot check waits for clients to rejoin" grep -q 'nomad-nodes-ready.py" .*--attempts 18' "$READY"
+for wf_path in "$PATCH" "$READY"; do
+  wf_name="$(basename "$wf_path")"
+  check "${wf_name} turns off nomad CLI hints" grep -q 'NOMAD_CLI_SHOW_HINTS: "0"' "$wf_path"
+  check "${wf_name} reads node status only through the JSON check" bash -c "! grep -q 'nomad node status' '$wf_path'"
+  check "${wf_name} runs the checked-out readiness script" grep -q '"${GITHUB_WORKSPACE}/scripts/nomad-nodes-ready.py"' "$wf_path"
+done
 check "manual runner reboot waits until nomad answers" awk '
   /Wait for Nomad server to be ready/ { waited = 1 }
   /shutdown -r \+2/ { if (!waited) exit 1; found = 1 }
   END { exit !(waited && found) }
 ' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
 check "playbook can leave the runner reboot to CI" grep -q 'patch_defer_runner_reboot' "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+
+TESTWF="$ROOT/.github/workflows/test.yml"
+check "test workflow runs on pull requests" grep -Eq '^[[:space:]]*pull_request:' "$TESTWF"
+check "test workflow runs on pushes to main" awk '
+  /^[[:space:]]*push:/ { in_push = 1; next }
+  in_push && /^[[:space:]]*- main$/ { found = 1 }
+  in_push && /^[^[:space:]]/ { in_push = 0 }
+  END { exit !found }
+' "$TESTWF"
+check "test workflow is GitHub-hosted" assert_eq "$(grep 'runs-on:' "$TESTWF" | tr -d ' ')" "runs-on:ubuntu-latest"
+check "test workflow can only read contents" assert_eq "$(grep -A1 'permissions:' "$TESTWF")" $'permissions:\n  contents: read'
+check "test workflow uses no secrets" bash -c "! grep -v '^[[:space:]]*#' '$TESTWF' | grep -q secrets"
+check "test workflow runs every repo test" grep -qF 'scripts/*_test.sh' "$TESTWF"
+
+# Pull request code must never reach the homelab runner. It holds Nomad tokens.
+pr_workflows_are_hosted() {
+  local wf body bad=0
+  for wf in "$ROOT"/.github/workflows/*.yml; do
+    body="$(grep -v '^[[:space:]]*#' "$wf")"
+    if [[ "$body" == *pull_request* && "$body" == *self-hosted* ]]; then
+      echo "${wf}: pull request workflow uses the self-hosted runner" >&2
+      bad=1
+    fi
+  done
+  return "$bad"
+}
+check "pull request workflows never use the self-hosted runner" pr_workflows_are_hosted
+check "no workflow uses pull_request_target" bash -c "! grep -q pull_request_target '$ROOT'/.github/workflows/*.yml"
 
 # A workload identity reads only nomad/jobs/<job>, .../<group>, and
 # .../<group>/<task> without a policy. A job or group path is shared with
@@ -656,6 +693,107 @@ step_precedes() {
 check "reconcile loads the token before nomad runs" step_precedes "$WF" "Load Nomad token" "Reconcile Nomad jobs"
 check "patch loads the token before the playbook" step_precedes "$PATCH" "Load Nomad token" "Patch Nomad hosts"
 check "post-reboot check loads the token before nomad runs" step_precedes "$READY" "Load Nomad token" "Confirm Nomad nodes are ready"
+check "post-reboot check checks out the readiness script" step_precedes "$READY" "Checkout" "Confirm Nomad nodes are ready"
+
+# Executable fake for nomad-nodes-ready.py, which runs nomad as a subprocess.
+# It always prints the Web UI hint on stderr, as table output does with hints on.
+FAKE_BIN="$TMP/bin"
+mkdir -p "$FAKE_BIN"
+cat >"$FAKE_BIN/nomad" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_NOMAD_CALLS"
+echo "==> View and manage Nomad clients in the Web UI: http://192.168.68.65:4646/ui/clients" >&2
+if (( $(wc -l <"$FAKE_NOMAD_CALLS") <= ${FAKE_NOMAD_FAIL_FIRST:-0} )); then
+  echo "Error querying node status: Unexpected response code: 500 (No cluster leader)" >&2
+  exit 1
+fi
+if [[ -n "${FAKE_NOMAD_SLEEP:-}" ]]; then
+  exec sleep "$FAKE_NOMAD_SLEEP"
+fi
+cat "$FAKE_NOMAD_STDOUT"
+EOF
+chmod +x "$FAKE_BIN/nomad"
+
+nodes_json() {
+  local sep="" spec
+  printf '['
+  for spec in "$@"; do
+    printf '%s{"ID": "id-%s", "Name": "%s", "Status": "%s", "SchedulingEligibility": "eligible", "Drain": false}' \
+      "$sep" "${spec%%:*}" "${spec%%:*}" "${spec#*:}"
+    sep=", "
+  done
+  printf ']\n'
+}
+
+# Prints the exit code, then the script's output. nomad calls land in $TMP/ready-calls.
+ready_case() {
+  local stdout="$1" rc
+  shift
+  printf '%s\n' "$stdout" >"$TMP/ready-stdout"
+  : >"$TMP/ready-calls"
+  set +e
+  PATH="$FAKE_BIN:$PATH" FAKE_NOMAD_STDOUT="$TMP/ready-stdout" FAKE_NOMAD_CALLS="$TMP/ready-calls" \
+    FAKE_NOMAD_FAIL_FIRST="${FAKE_NOMAD_FAIL_FIRST:-0}" FAKE_NOMAD_SLEEP="${FAKE_NOMAD_SLEEP:-}" \
+    GITHUB_ACTIONS="${READY_ACTIONS:-}" "$ROOT/scripts/nomad-nodes-ready.py" --delay 0 "$@" >"$TMP/ready-out" 2>&1
+  rc=$?
+  set -e
+  printf '%s\n' "$rc"
+  cat "$TMP/ready-out"
+}
+
+UI_HINT="==> View and manage Nomad clients in the Web UI: http://192.168.68.65:4646/ui/clients"
+READY3="$(nodes_json pinode2:ready pinode4:ready pinode3:ready)"
+check "three ready nodes pass" assert_eq "$(ready_case "$READY3" --min 3)" "0
+node pinode2 status=ready eligibility=eligible drain=false
+node pinode3 status=ready eligibility=eligible drain=false
+node pinode4 status=ready eligibility=eligible drain=false"
+check "readiness reads node status as JSON" assert_eq "$(cat "$TMP/ready-calls")" "node status -json"
+check "a hint on stdout around the JSON does not fail a ready cluster" \
+  assert_eq "$(ready_case "${UI_HINT}"$'\n'"${READY3}"$'\n'"${UI_HINT}" --min 3 | head -n 1)" "0"
+# Table output from the first real patch run: every node ready, hint last.
+check "table output is not mistaken for a node list" assert_eq "$(ready_case "ID        Node Pool  DC       Name     Class   Drain  Eligibility  Status
+68d76dab  default    homelab  pinode2  <none>  false  eligible     ready
+ea425cc0  default    homelab  pinode4  <none>  false  eligible     ready
+593daf4e  default    homelab  pinode3  <none>  false  eligible     ready
+
+${UI_HINT}" --min 3)" "1
+no JSON node list in nomad node status output"
+check "a down node fails" assert_eq "$(ready_case "$(nodes_json pinode2:ready pinode3:down pinode4:ready)" --min 3 | sed -n '1p;3p')" "1
+node pinode3 status=down eligibility=eligible drain=false"
+check "an initializing node fails" assert_eq "$(ready_case "$(nodes_json pinode2:ready pinode3:initializing pinode4:ready)" --min 3 | head -n 1)" "1"
+check "two of three clients fail" assert_eq "$(ready_case "$(nodes_json pinode2:ready pinode3:ready)" --min 3 | sed -n '1p;$p')" "1
+2 nodes listed, want at least 3"
+check "an empty node list fails" assert_eq "$(ready_case "[]" --min 3)" "1
+0 nodes listed, want at least 3"
+check "a non-object entry fails" assert_eq "$(ready_case '["pinode2"]' --min 0 | head -n 1)" "1"
+check "a nomad error fails with its message" assert_eq "$(FAKE_NOMAD_FAIL_FIRST=9 ready_case "$READY3" --min 3)" "1
+nomad node status exited 1
+${UI_HINT}
+Error querying node status: Unexpected response code: 500 (No cluster leader)"
+check "a leaderless server is retried" assert_eq "$(FAKE_NOMAD_FAIL_FIRST=2 ready_case "$READY3" --min 3 --attempts 3 | head -n 1)" "0"
+check "retries call nomad once per attempt" assert_eq "$(wc -l <"$TMP/ready-calls" | tr -d ' ')" "3"
+check "retries stop at the attempt limit" assert_eq "$(FAKE_NOMAD_FAIL_FIRST=9 ready_case "$READY3" --min 3 --attempts 2 | head -n 1)" "1"
+check "retries stop at the attempt limit after two calls" assert_eq "$(wc -l <"$TMP/ready-calls" | tr -d ' ')" "2"
+check "a hung nomad call is bounded" assert_eq "$(FAKE_NOMAD_SLEEP=5 ready_case "$READY3" --min 3 --timeout 0.2)" "1
+nomad node status timed out after 0.2s"
+check "node lines are checks notices under Actions" assert_eq "$(READY_ACTIONS=true ready_case "$READY3" --min 3 | sed -n 2p)" \
+  "::notice::node pinode2 status=ready eligibility=eligible drain=false"
+
+# The post-reboot step itself, run from this checkout against the fake.
+if [[ ! -e /run/systemd/shutdown/scheduled ]]; then
+  printf '%s\n' "$READY3" >"$TMP/ready-stdout"
+  : >"$TMP/ready-calls"
+  set +e
+  PATH="$FAKE_BIN:$PATH" FAKE_NOMAD_STDOUT="$TMP/ready-stdout" FAKE_NOMAD_CALLS="$TMP/ready-calls" \
+    GITHUB_WORKSPACE="$ROOT" GITHUB_ACTIONS=true RECHECK_ATTEMPT=0 \
+    bash -c "$(workflow_step_script "$READY" 'Confirm Nomad nodes are ready')" >"$TMP/ready-step" 2>&1
+  step_rc=$?
+  set -e
+  check "post-reboot step passes a ready cluster" assert_eq "$step_rc" "0"
+  check "post-reboot step notices each node" grep -q '^::notice::node pinode3 status=ready' "$TMP/ready-step"
+  check "post-reboot step reports the cluster ready" grep -q '^::notice::all nomad nodes ready after patch$' "$TMP/ready-step"
+  check "post-reboot step prints no error" bash -c "! grep -q '::error::' '$TMP/ready-step'"
+fi
 
 TOKEN_ENV_LINE="NOMAD_TOKEN: \"{{ lookup('ansible.builtin.env', 'NOMAD_TOKEN') }}\""
 every_play_passes_token() {
@@ -678,6 +816,229 @@ acl_block_enabled() {
 check "server config enables ACLs" acl_block_enabled "$ROOT/bootstrap/nomad/roles/nomad_server/templates/server.hcl.j2"
 check "client config enables ACLs" acl_block_enabled "$ROOT/bootstrap/nomad/roles/nomad_client/templates/client.hcl.j2"
 check "client introduction is left at its default" bash -c "! grep -rq client_introduction '$ROOT/bootstrap/nomad/roles'"
+
+ROLES="$ROOT/bootstrap/nomad/roles"
+COMMON="$ROLES/common/tasks/main.yml"
+CLIENT_ROLE="$ROLES/nomad_client/tasks/main.yml"
+KEYRING_TASKS="$ROLES/common/tasks/apt_keyring.yml"
+PATCH_PLAY="$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+check "no apt key is guarded by creates" bash -c \
+  "! grep -rh --include='*.yml' -v '^[[:space:]]*#' '$ROLES' '$ROOT/bootstrap/nomad/playbooks' | grep -q 'creates:'"
+check "apt keys are downloaded on every run" awk '
+  /ansible.builtin.get_url:/ { in_get = 1; next }
+  in_get && index($0, "url: \"{{ apt_keyring_url }}\"") { found = 1 }
+  in_get && /^[[:space:]]*- name:/ { in_get = 0 }
+  in_get && /^[[:space:]]*(when|creates):/ { bad = 1 }
+  END { exit !(found && !bad) }
+' "$KEYRING_TASKS"
+check "an apt key download must hold a public key before it is installed" awk '
+  /- name: Check .* holds a public key/ { checking = 1 }
+  checking && /select\(.match., .pub:.\)/ { checked = 1 }
+  /- name: Install / { exit !checked }
+  END { exit !checked }
+' "$KEYRING_TASKS"
+check "the apt keyring is installed by copy" assert_eq \
+  "$(awk '/ansible.builtin.copy:/ { f = 1 } f && /dest:/ { sub(/^[[:space:]]*dest:[[:space:]]*/, ""); print; exit }' "$KEYRING_TASKS")" \
+  '"{{ apt_keyring_path }}"'
+check "an apt key download must hold only allowed keys before it is installed" awk '
+  /- name: Check .* holds only allowed keys/ { checking = 1 }
+  checking && /difference\(apt_keyring_allowed\)/ { checked = 1 }
+  /- name: Install / { exit !checked }
+  END { exit !checked }
+' "$KEYRING_TASKS"
+# Every apt_keyring.yml import passes an allowlist.
+imports_pin_fingerprints() {
+  local file imports pins ok=0
+  for file in "$@"; do
+    imports="$(grep -c 'import_tasks: .*apt_keyring\.yml$' "$file")"
+    pins="$(grep -c 'apt_keyring_fingerprints: "{{ [a-z_]*_apt_key_fingerprints }}"' "$file")"
+    if [[ "$imports" -eq 0 || "$imports" != "$pins" ]]; then
+      echo "${file}: ${imports} keyring imports, ${pins} fingerprint allowlists" >&2
+      ok=1
+    fi
+  done
+  return "$ok"
+}
+check "every apt keyring import passes a fingerprint allowlist" \
+  imports_pin_fingerprints "$ROOT/bootstrap/nomad/roles/common/tasks/main.yml" "$ROOT/bootstrap/nomad/roles/nomad_client/tasks/main.yml" "$ROOT/bootstrap/nomad/playbooks/patch_cluster.yml"
+# Items of list $2 in role $1's defaults.
+role_default_list() {
+  awk -v key="$2:" '
+    $1 == key { in_list = 1; next }
+    in_list && /^[^[:space:]#]/ { exit }
+    in_list && /^[[:space:]]+- / { print $2 }
+  ' "$ROLES/$1/defaults/main.yml"
+}
+fingerprints_well_formed() {
+  local list
+  list="$(role_default_list "$1" "$2")"
+  [[ -n "$list" ]] && ! grep -vqxE '[0-9A-F]{40}' <<<"$list" && grep -qx "$3" <<<"$list"
+}
+check "HashiCorp key is pinned to its signing key" \
+  fingerprints_well_formed common hashicorp_apt_key_fingerprints D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
+check "Docker key is pinned to its signing key" \
+  fingerprints_well_formed nomad_client docker_apt_key_fingerprints 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+
+role_default() { awk -v key="$2:" '$1 == key { print $2; exit }' "$ROLES/$1/defaults/main.yml"; }
+check "HashiCorp key comes from its apt repo" \
+  assert_eq "$(role_default common hashicorp_apt_key_url)" "https://apt.releases.hashicorp.com/gpg"
+check "Docker key comes from its apt repo" \
+  assert_eq "$(role_default nomad_client docker_apt_key_url)" "https://download.docker.com/linux/debian/gpg"
+
+# Each import_tasks path, resolved from the importing file's directory, exists.
+imports_resolve() {
+  local file path ok=0
+  for file in "$@"; do
+    while read -r path; do
+      if [[ ! -f "$(dirname "$file")/$path" ]]; then
+        echo "${file} imports missing ${path}" >&2
+        ok=1
+      fi
+    done < <(awk '/import_tasks:/ { print $2 }' "$file")
+  done
+  return "$ok"
+}
+check "every task import resolves" imports_resolve "$COMMON" "$CLIENT_ROLE" "$PATCH_PLAY"
+
+# 0 when, in play $2 (empty for a role file), the apt_keyring.yml import for
+# keyring variable $3 comes before the task named $4.
+keyring_refreshed_before() {
+  awk -v play="$2" -v keyring="apt_keyring_path: \"{{ $3 }}\"" -v task="- name: $4" '
+    BEGIN { in_play = (play == "") }
+    play != "" && /^- name:/ { in_play = (index($0, "- name: " play) == 1); next }
+    !in_play { next }
+    /^[[:space:]]*- name:/ { importing = 0 }
+    /import_tasks: .*apt_keyring\.yml$/ { importing = 1 }
+    importing && index($0, keyring) { refreshed = 1 }
+    index($0, task) { found = 1; exit }
+    END { exit !(found && refreshed) }
+  ' "$1"
+}
+check "common refreshes the HashiCorp key before adding its repo" \
+  keyring_refreshed_before "$COMMON" "" hashicorp_apt_keyring "Add HashiCorp repository"
+check "HashiCorp repo is signed by the refreshed keyring" grep -q 'signed_by: "{{ hashicorp_apt_keyring }}"' "$COMMON"
+check "nomad_client refreshes the Docker key before adding its repo" \
+  keyring_refreshed_before "$CLIENT_ROLE" "" docker_apt_keyring "Add Docker repository"
+check "Docker repo is signed by the refreshed keyring" grep -q 'signed_by: "{{ docker_apt_keyring }}"' "$CLIENT_ROLE"
+check "patch refreshes the HashiCorp key on clients before the drain" \
+  keyring_refreshed_before "$PATCH_PLAY" "Patch Nomad Clients" hashicorp_apt_keyring "Enable drain with deadline"
+check "patch refreshes the Docker key on clients before the drain" \
+  keyring_refreshed_before "$PATCH_PLAY" "Patch Nomad Clients" docker_apt_keyring "Enable drain with deadline"
+check "patch refreshes the HashiCorp key on the server before apt update" \
+  keyring_refreshed_before "$PATCH_PLAY" "Patch Nomad Server" hashicorp_apt_keyring "Update package cache and upgrade packages"
+
+play_loads_vars_file() {
+  awk -v play="- name: $2" -v vars_file="- $3" '
+    /^- name:/ { in_play = (index($0, play) == 1); in_vars = 0; next }
+    in_play && /^  vars_files:/ { in_vars = 1; next }
+    in_vars && /^  [^ ]/ { in_vars = 0 }
+    in_vars && index($0, vars_file) { found = 1 }
+    END { exit !found }
+  ' "$1"
+}
+check "client patch play loads the HashiCorp key defaults" \
+  play_loads_vars_file "$PATCH_PLAY" "Patch Nomad Clients" ../roles/common/defaults/main.yml
+check "client patch play loads the Docker key defaults" \
+  play_loads_vars_file "$PATCH_PLAY" "Patch Nomad Clients" ../roles/nomad_client/defaults/main.yml
+check "server patch play loads the HashiCorp key defaults" \
+  play_loads_vars_file "$PATCH_PLAY" "Patch Nomad Server" ../roles/common/defaults/main.yml
+
+# Packages an apt task in a role file leaves in the given state.
+role_packages() {
+  awk -v want="$2" '
+    function flush(  i) { if (in_apt && state == want) for (i = 1; i <= n; i++) print pkgs[i] }
+    /^- name:/ { flush(); in_apt = 0; n = 0; state = ""; next }
+    /^  (ansible\.builtin\.)?apt:/ { in_apt = 1; next }
+    in_apt && /^    name: [^[:space:]]/ { pkgs[++n] = $2 }
+    in_apt && /^      - / { pkgs[++n] = $2 }
+    in_apt && /^    state:/ { state = $2 }
+    END { flush() }
+  ' "$1"
+}
+mapfile -t COMMON_PKGS < <(role_packages "$COMMON" present)
+check "common installs ca-certificates for https apt sources" \
+  bash -c "printf '%s\n' ${COMMON_PKGS[*]} | grep -qx ca-certificates"
+check "common installs nomad" bash -c "printf '%s\n' ${COMMON_PKGS[*]} | grep -qx nomad"
+no_role_removes_common_packages() {
+  local removed pkg
+  removed="$(role_packages "$ROLES/nomad_server/tasks/main.yml" absent; role_packages "$ROLES/nomad_client/tasks/main.yml" absent)"
+  [[ -n "$removed" ]] || return 1
+  for pkg in "${COMMON_PKGS[@]}"; do
+    if grep -qx -- "$pkg" <<<"$removed"; then
+      echo "a role removes ${pkg}, which common installs" >&2
+      return 1
+    fi
+  done
+}
+check "server role still removes docker" \
+  bash -c "grep -qx docker-ce <<<'$(role_packages "$ROLES/nomad_server/tasks/main.yml" absent)'"
+check "no role removes a package common installs" no_role_removes_common_packages
+
+# The shared keyring tasks, run for real on this machine against a file:// URL
+# and a keyring in a temp directory.
+if command -v ansible-playbook >/dev/null 2>&1 && command -v gpg >/dev/null 2>&1; then
+  # Short path: gpg-agent sockets live under the home directory on some hosts.
+  KT="$(mktemp -d /tmp/keyring.XXXXXX)"
+  trap 'for h in "$KT"/gpg-*; do gpgconf --homedir "$h" --kill all >/dev/null 2>&1 || true; done; rm -rf "$TMP" "$KT"' EXIT
+  mkdir -p "$KT/tmp"
+  mkdir -m 700 "$KT/gpg-old" "$KT/gpg-new" "$KT/gpg-rogue" "$KT/gpg-both" "$KT/gpg-run"
+  for k in old new rogue; do
+    GNUPGHOME="$KT/gpg-$k" gpg -q --batch --passphrase '' --quick-gen-key "keyring test $k" ed25519 sign never 2>/dev/null
+    GNUPGHOME="$KT/gpg-$k" gpg -q --armor --export >"$KT/$k.asc"
+  done
+  # One armored block holding an allowed key and one that is not.
+  GNUPGHOME="$KT/gpg-both" gpg -q --batch --import "$KT/new.asc" "$KT/rogue.asc" 2>/dev/null
+  GNUPGHOME="$KT/gpg-both" gpg -q --armor --export >"$KT/both.asc"
+  OLD_FPR="$(GNUPGHOME="$KT/gpg-old" gpg --with-colons --fingerprint | awk -F: '/^fpr/ { print $10; exit }')"
+  NEW_FPR="$(GNUPGHOME="$KT/gpg-new" gpg --with-colons --fingerprint | awk -F: '/^fpr/ { print $10; exit }')"
+  echo signed >"$KT/msg"
+  GNUPGHOME="$KT/gpg-old" gpg -q --batch --armor --detach-sign -o "$KT/sig.asc" "$KT/msg"
+  echo '<html><body>503 Service Unavailable</body></html>' >"$KT/html.asc"
+  : >"$KT/ansible.cfg"
+  cat >"$KT/play.yml" <<EOF
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: "$KEYRING_TASKS"
+      vars:
+        apt_keyring_url: "file://$KT/served.asc"
+        apt_keyring_path: "$KT/keyring.gpg"
+        apt_keyring_fingerprints: ["${OLD_FPR,,}", "$NEW_FPR"]
+EOF
+
+  # Serves $1 and runs the tasks. Prints the recap counts and the keyring's
+  # first fingerprint.
+  keyring_run() {
+    local served="$1" recap fpr
+    shift
+    cp "$KT/$served" "$KT/served.asc"
+    recap="$(GNUPGHOME="$KT/gpg-run" TMPDIR="$KT/tmp" ANSIBLE_CONFIG="$KT/ansible.cfg" \
+      ANSIBLE_NOCOLOR=1 ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_LOCALHOST_WARNING=false \
+      ansible-playbook -i localhost, -e 'ansible_python_interpreter={{ ansible_playbook_python }}' \
+      "$KT/play.yml" "$@" 2>&1 | sed -nE 's/^localhost +: .*changed=([0-9]+).*failed=([0-9]+).*/changed=\1 failed=\2/p')"
+    fpr="$(GNUPGHOME="$KT/gpg-run" gpg --batch --show-keys --with-colons "$KT/keyring.gpg" 2>/dev/null \
+      | awk -F: '/^fpr/ { print $10; exit }')"
+    printf '%s fpr=%s\n' "${recap:-no-recap}" "${fpr:-none}"
+  }
+  check "keyring: the first run installs the key" assert_eq "$(keyring_run old.asc)" "changed=1 failed=0 fpr=${OLD_FPR}"
+  check "keyring: a rerun changes nothing" assert_eq "$(keyring_run old.asc)" "changed=0 failed=0 fpr=${OLD_FPR}"
+  check "keyring: check mode reports a rotation without writing it" \
+    assert_eq "$(keyring_run new.asc --check)" "changed=1 failed=0 fpr=${OLD_FPR}"
+  check "keyring: a rotation replaces the key" assert_eq "$(keyring_run new.asc)" "changed=1 failed=0 fpr=${NEW_FPR}"
+  check "keyring: a rerun after rotation changes nothing" assert_eq "$(keyring_run new.asc)" "changed=0 failed=0 fpr=${NEW_FPR}"
+  check "keyring: an error page is refused" assert_eq "$(keyring_run html.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: a detached signature is refused" assert_eq "$(keyring_run sig.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: a key outside the allowlist is refused" assert_eq "$(keyring_run rogue.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: check mode refuses a key outside the allowlist" \
+    assert_eq "$(keyring_run rogue.asc --check)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: an allowed key bundled with another is refused" assert_eq "$(keyring_run both.asc)" "changed=0 failed=1 fpr=${NEW_FPR}"
+  check "keyring: a rerun after refusals changes nothing" assert_eq "$(keyring_run new.asc)" "changed=0 failed=0 fpr=${NEW_FPR}"
+  check "keyring: staging directories are removed" \
+    assert_eq "$(find "$KT/tmp" -mindepth 1 -maxdepth 1 -name '*apt-key' | wc -l | tr -d ' ')" "0"
+else
+  echo "skip keyring run: needs ansible-playbook and gpg"
+fi
 
 POL="$ROOT/nomad_acl/policies"
 policies_lack() { ! grep -hv '^[[:space:]]*#' "$POL"/*.hcl | grep -Eq "$1"; }

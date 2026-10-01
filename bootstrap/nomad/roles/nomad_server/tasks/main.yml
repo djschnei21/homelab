@@ -14,11 +14,12 @@
     name: docker-ce
     state: absent
 
+# Not ca-certificates: common installs it because apt and the HashiCorp key
+# refresh reach their sources over https.
 - name: Remove Docker-related packages if present
   apt:
     name:
       - apt-transport-https
-      - ca-certificates
       - curl
       - gnupg
       - lsb-release
