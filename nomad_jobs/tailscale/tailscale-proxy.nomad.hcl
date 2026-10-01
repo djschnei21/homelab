@@ -217,14 +217,12 @@ EOF
         read_only   = false
       }
 
+      # Read by tailscale up as file:, so the key stays out of argv and the task env.
       template {
         data        = <<EOF
-{{ with nomadVar "nomad/jobs/tailscale-proxy/proxy/electrs-gw" }}
-TS_AUTHKEY={{ .TS_AUTHKEY }}
-{{ end }}
+{{ with nomadVar "nomad/jobs/tailscale-proxy/proxy/electrs-gw" }}{{ .TS_AUTHKEY }}{{ end }}
 EOF
-        destination = "${NOMAD_SECRETS_DIR}/ts.env"
-        env         = true
+        destination = "${NOMAD_SECRETS_DIR}/ts_authkey"
         change_mode = "restart"
       }
 
@@ -234,7 +232,7 @@ set -e
 mkdir -p /data/electrs-ts
 tailscaled --tun=userspace-networking --statedir=/data/electrs-ts --socket=/tmp/tailscaled.sock --outbound-http-proxy-listen=127.0.0.1:1055 --socks5-server=127.0.0.1:1055 &
 sleep 2
-tailscale --socket=/tmp/tailscaled.sock up --auth-key="$TS_AUTHKEY" --hostname=electrs --advertise-tags=tag:homelab --accept-dns=false
+tailscale --socket=/tmp/tailscaled.sock up --auth-key="file:$NOMAD_SECRETS_DIR/ts_authkey" --hostname=electrs --advertise-tags=tag:homelab --accept-dns=false
 i=0
 while [ "$i" -lt 60 ]; do
   if tailscale --socket=/tmp/tailscaled.sock ip -4 >/dev/null 2>&1; then
