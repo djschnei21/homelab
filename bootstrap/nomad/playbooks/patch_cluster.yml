@@ -81,22 +81,25 @@
     # into service, then fail the host so the roll stops.
     - name: Patch one client and return it to service
       block:
+        # Nomad 2.0 already drains system jobs last. -ignore-system keeps the
+        # CSI node plugin up so volume unstage can finish.
         - name: Enable drain with deadline
-          command: nomad node drain -enable -deadline 15m -yes -self
+          command: nomad node drain -enable -deadline 15m -ignore-system -yes -self
           register: drain_result
 
         # DrainStrategy is nil only after the drain finishes. LastDrain.Status
         # is the wrong signal: a null LastDrain fails this task at once, and a
         # previous "complete" would start apt while allocs are still moving.
-        # The deadline force-stops leftovers at 15m, so the wait has to run
-        # past that or the rescue undrains and the roll never reaches apt.
+        # The deadline is 15m and a bitcoind stop can take another 15m, so the
+        # wait has to run past both or the rescue undrains and the roll never
+        # reaches apt.
         - name: Wait for drain to complete
           command: nomad node status -self -json
           register: drain_status
           until: >-
             (drain_status.stdout | from_json).SchedulingEligibility == 'ineligible' and
             (drain_status.stdout | from_json).DrainStrategy is none
-          retries: 120
+          retries: 240
           delay: 10
           changed_when: false
 

@@ -101,3 +101,31 @@
     group: nomad
   notify:
     - Restart Nomad
+
+# One portal. multipath-tools would put a device-mapper device in front of
+# that single path, so it is not installed.
+- name: Install iSCSI initiator tools
+  ansible.builtin.apt:
+    name:
+      - open-iscsi
+      - lsscsi
+      - sg3-utils
+    state: present
+
+# Leave /etc/iscsi/initiatorname.iscsi alone. The NAS allow-list is the IQN
+# already on each client, and rewriting the file would lock the node out.
+# The package creates it on first install; this role never templates it.
+- name: Install iscsid configuration
+  ansible.builtin.template:
+    src: iscsid.conf.j2
+    dest: /etc/iscsi/iscsid.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart iscsid
+
+- name: Enable and start iscsid
+  ansible.builtin.systemd_service:
+    name: iscsid
+    enabled: true
+    state: started
