@@ -135,8 +135,8 @@ EOS
       type            = "csi"
       read_only       = false
       attachment_mode = "file-system"
-      access_mode     = "multi-node-single-writer"
-      source          = "electrs-data"
+      access_mode     = "single-node-writer"
+      source          = "electrs-index"
     }
 
     network {
