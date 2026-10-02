@@ -485,12 +485,20 @@ EOT
       unlimited      = false
     }
 
+    # ext4 on a block volume cannot be mounted by two clients; on a lost client
+    # Nomad keeps the original allocation and an operator confirms the node is off before `nomad node purge`.
+    disconnect {
+      lost_after = "12h"
+      replace    = false
+      reconcile  = "keep_original"
+    }
+
     volume "albyhub-data" {
       type            = "csi"
       read_only       = false
       attachment_mode = "file-system"
       access_mode     = "single-node-writer"
-      source          = "albyhub-data"
+      source          = "albyhub-work"
     }
 
     network {
