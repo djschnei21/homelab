@@ -3,7 +3,7 @@ job "bitcoin-stack" {
   namespace   = "bitcoin"
 
   meta {
-    version = "2026-08-20-v4"
+    version = "2026-10-02-v1"
   }
 
   # Bitcoin Core - base layer, no dependencies
@@ -52,6 +52,7 @@ job "bitcoin-stack" {
         env         = true
         data        = <<EOT
 rpcauth={{ with nomadVar "nomad/jobs/bitcoin-stack/bitcoin/bitcoind" }}{{ .rpcauth }}{{ end }}
+rpcauth_electrs={{ with nomadVar "nomad/jobs/bitcoin-stack/bitcoin/bitcoind" }}{{ .rpcauth_electrs }}{{ end }}
 EOT
       }
 
@@ -60,7 +61,7 @@ EOT
 
         entrypoint = ["sh", "-c"]
         args = [<<EOS
-if [ -z "$rpcauth" ]; then
+if [ -z "$rpcauth" ] || [ -z "$rpcauth_electrs" ]; then
   echo "bitcoind rpcauth is not set" >&2
   exit 1
 fi
@@ -72,6 +73,7 @@ exec bitcoind \
   -rpcport=8332 \
   -rpcallowip=0.0.0.0/0 \
   -rpcauth="$rpcauth" \
+  -rpcauth="$rpcauth_electrs" \
   -port=8333 \
   -printtoconsole
 EOS
@@ -129,14 +131,6 @@ EOS
 
   # Electrs - depends on Bitcoin Core
   group "electrs" {
-    volume "bitcoin-data" {
-      type            = "csi"
-      read_only       = true
-      attachment_mode = "file-system"
-      access_mode     = "multi-node-single-writer"
-      source          = "bitcoin-data"
-    }
-
     volume "electrs-data" {
       type            = "csi"
       read_only       = false
@@ -203,17 +197,27 @@ EOF
         env         = true
       }
 
+      # electrs v0.11.1 refuses auth as a flag or env var.
+      template {
+        destination = "${NOMAD_SECRETS_DIR}/electrs.conf"
+        perms       = "0400"
+        uid         = 3001
+        gid         = 3001
+        data        = <<EOT
+auth = "{{ with nomadVar "nomad/jobs/bitcoin-stack/electrs/electrs" }}{{ .rpc_user }}:{{ .rpc_password }}{{ end }}"
+EOT
+      }
+
       config {
         image = "getumbrel/electrs:v0.11.1"
         args = [
           "--skip-default-conf-files",
           "--log-filters", "INFO",
           "--db-dir", "/opt/electrs",
-          "--daemon-dir", "/opt/bitcoin",
-          "--cookie-file", "/opt/bitcoin/.cookie",
           "--daemon-rpc-addr", "${BITCOIN_RPC}",
           "--daemon-p2p-addr", "${BITCOIN_P2P}",
-          "--electrum-rpc-addr", "0.0.0.0:${NOMAD_PORT_electrs_rpc}"
+          "--electrum-rpc-addr", "0.0.0.0:${NOMAD_PORT_electrs_rpc}",
+          "--conf", "${NOMAD_SECRETS_DIR}/electrs.conf"
         ]
         ports = ["electrs_rpc"]
       }
@@ -224,12 +228,6 @@ EOF
         volume      = "electrs-data"
         destination = "/opt/electrs"
         read_only   = false
-      }
-
-      volume_mount {
-        volume      = "bitcoin-data"
-        destination = "/opt/bitcoin"
-        read_only   = true
       }
 
       resources {
