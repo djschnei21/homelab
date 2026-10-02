@@ -84,8 +84,9 @@ job "csi-scratch-holder" {
         image      = "instrumentisto/rsync-ssh:alpine3.23-r3"
         entrypoint = ["/bin/sh"]
         args       = ["/local/hold.sh"]
-        user       = "65534:65534"
       }
+
+      user = "65534:65534"
 
       env {
         NODE_NAME      = "${node.unique.name}"
