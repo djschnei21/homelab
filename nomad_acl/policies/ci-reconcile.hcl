@@ -35,7 +35,8 @@ namespace "default" {
     "register-job",
     "read-logs",
     "csi-mount-volume",
-    # plugin-nfs-controller and plugin-nfs-nodes carry csi_plugin blocks.
+    # plugin-nfs-controller, plugin-nfs-nodes, democratic-csi-iscsi-controller,
+    # and democratic-csi-iscsi-nodes carry csi_plugin blocks.
     "csi-register-plugin",
   ]
 }

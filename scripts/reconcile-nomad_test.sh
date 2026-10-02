@@ -1041,10 +1041,26 @@ else
 fi
 
 POL="$ROOT/nomad_acl/policies"
-policies_lack() { ! grep -hv '^[[:space:]]*#' "$POL"/*.hcl | grep -Eq "$1"; }
+# storage-admin scales and creates volumes. It cannot submit jobs: a submitted
+# job's workload identity would read every variable under nomad/jobs/.
+ci_policies_lack() {
+  ! grep -hv '^[[:space:]]*#' "$POL/ci-reconcile.hcl" "$POL/ci-patch.hcl" | grep -Eq "$1"
+}
 check "no anonymous policy" test ! -e "$POL/anonymous.hcl"
-check "policies grant no variable access" policies_lack 'variables'
-check "policies grant no broad job rights" policies_lack 'submit-job|alloc-exec|alloc-lifecycle|read-fs|csi-write-volume|management'
+check "policies grant no variable access" bash -c "! grep -hv '^[[:space:]]*#' '$POL'/*.hcl | grep -q variables"
+check "policies grant no broad job rights" ci_policies_lack 'submit-job|alloc-exec|alloc-lifecycle|read-fs|csi-write-volume|management'
+SA="$POL/storage-admin.hcl"
+check "storage-admin tokens are 24h" grep -q -- '-ttl=24h' "$SA"
+check "storage-admin cannot submit jobs" bash -c "! grep -Eq '\"(plan-job|register-job|submit-job)\"' '$SA'"
+for cap in list-jobs read-job scale-job read-job-scaling alloc-lifecycle read-logs csi-write-volume csi-read-volume csi-list-volume csi-mount-volume; do
+  check "storage-admin ${cap} in both namespaces" assert_eq "$(grep -c "\"${cap}\"" "$SA")" "2"
+done
+check "storage-admin does not register plugins" bash -c "! grep -q csi-register-plugin '$SA'"
+check "storage-admin plugin and node are read" assert_eq \
+  "$(grep -E '^[[:space:]]*policy[[:space:]]*=' "$SA")" \
+  $'  policy = "read"\n  policy = "read"'
+check "reconcile comment names the democratic-csi jobs" \
+  grep -q 'democratic-csi-iscsi-controller' "$POL/ci-reconcile.hcl"
 check "only ci-patch has a write policy" \
   assert_eq "$(grep -lE '^[[:space:]]*policy[[:space:]]*=[[:space:]]*"write"' "$POL"/*.hcl)" "$POL/ci-patch.hcl"
 check "ci-patch writes only nodes" \
