@@ -22,12 +22,20 @@ job "bitcoin-stack" {
       progress_deadline = "20m"
     }
 
+    # ext4 on a block volume cannot be mounted by two clients; on a lost client
+    # Nomad keeps the original allocation and an operator confirms the node is off before `nomad node purge`.
+    disconnect {
+      lost_after = "12h"
+      replace    = false
+      reconcile  = "keep_original"
+    }
+
     volume "bitcoin-data" {
       type            = "csi"
       read_only       = false
       attachment_mode = "file-system"
-      access_mode     = "multi-node-single-writer"
-      source          = "bitcoin-data"
+      access_mode     = "single-node-writer"
+      source          = "bitcoin-chain"
     }
 
     network {
