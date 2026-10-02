@@ -3,7 +3,7 @@ job "prometheus" {
   namespace   = "default"
 
   meta {
-    version = "2026-08-20-v2"
+    version = "2026-10-02"
   }
 
   group "prometheus" {
@@ -12,7 +12,7 @@ job "prometheus" {
       read_only       = false
       attachment_mode = "file-system"
       access_mode     = "single-node-writer"
-      source          = "prometheus-data"
+      source          = "prometheus-tsdb"
     }
 
     network {
@@ -33,7 +33,8 @@ job "prometheus" {
 
         args = [
           "--config.file=/etc/prometheus/prometheus.yml",
-          "--storage.tsdb.path=/prometheus",
+          # data/ keeps ext4 lost+found off the TSDB root; the mount stays /prometheus.
+          "--storage.tsdb.path=/prometheus/data",
           "--storage.tsdb.retention.time=15d",
           "--web.enable-lifecycle"
         ]
