@@ -3,7 +3,7 @@ job "prometheus" {
   namespace   = "default"
 
   meta {
-    version = "2026-10-02"
+    version = "2026-10-02-v2"
   }
 
   group "prometheus" {
@@ -124,7 +124,7 @@ EOF
       read_only       = false
       attachment_mode = "file-system"
       access_mode     = "single-node-writer"
-      source          = "grafana-data"
+      source          = "grafana-db"
     }
 
     network {
