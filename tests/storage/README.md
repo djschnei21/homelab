@@ -68,11 +68,13 @@ nomad job run -namespace=bitcoin \
 
 # Chain. Same default: pass 1 beside the live writer, pass 2 after the stop.
 # Skip the stale bitcoin-data directory at the source root.
+# The bitcoin chain export does not map root, so that copy passes task_user=3001:3001.
 nomad job run -namespace=bitcoin \
   -var namespace=bitcoin \
   -var source_volume=bitcoin-data \
   -var dest_volume=bitcoin-chain \
   -var chown=3001:3001 \
+  -var task_user=3001:3001 \
   -var 'extra_excludes=["/bitcoin-data"]' \
   tests/storage/copy-volume.nomad.hcl
 ```

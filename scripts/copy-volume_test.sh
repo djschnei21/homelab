@@ -224,6 +224,42 @@ check "a parent dest subdir is refused" assert_eq "$(VERIFY=false DEST_SUBDIR=..
 check "an exclude flag is refused" assert_eq "$(VERIFY=false DEST_SUBDIR= EXTRA_EXCLUDES=--delete run_copy)" "1"
 check "an exclude comma is refused" assert_eq "$(VERIFY=false DEST_SUBDIR= EXTRA_EXCLUDES='/a,/b' EXTRA_EXCLUDE_COUNT=1 run_copy)" "1"
 
+# Record rsync's argv. uid 0 is the default root task; 3001 stands in for task_user.
+flag_dir="$WORK/flag-bin"
+mkdir -p "$flag_dir"
+cat >"$flag_dir/rsync" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@" >"${RSYNC_LOG:?}"
+exit 0
+SH
+chmod 755 "$flag_dir/rsync"
+
+run_flags() {
+  local fake_uid=$1
+  local rc
+  cat >"$flag_dir/id" <<SH
+#!/bin/sh
+[ "\${1:-}" = "-u" ] || exit 1
+printf '%s\n' "$fake_uid"
+SH
+  chmod 755 "$flag_dir/id"
+  rm -f "$WORK/rsync.args"
+  set +e
+  PATH="$flag_dir:/usr/bin:/bin" \
+    RSYNC_LOG="$WORK/rsync.args" \
+    SRC_DIR="$WORK/src" DEST_DIR="$WORK/dest" \
+    CHOWN="${uid}:${gid}" DEST_SUBDIR= \
+    VERIFY=false CHECKSUM=false \
+    EXTRA_EXCLUDES= EXTRA_EXCLUDE_COUNT=0 \
+    /bin/sh /tmp/copy-volume.sh >"$WORK/out" 2>"$WORK/err"
+  rc=$?
+  set -e
+  printf '%s' "$rc"
+}
+
+check "default still passes --chown" bash -c '[[ $1 == 0 ]] && grep -Fxq -- "--chown=$2" "$3"' bash "$(run_flags 0)" "${uid}:${gid}" "$WORK/rsync.args"
+check "simulated non-root run does not pass --chown" bash -c '[[ $1 == 0 ]] && ! grep -F -q -- "--chown=" "$2"' bash "$(run_flags 3001)" "$WORK/rsync.args"
+
 if command -v shellcheck >/dev/null 2>&1; then
   check "copy script is shellcheck clean" shellcheck /tmp/copy-volume.sh
 else

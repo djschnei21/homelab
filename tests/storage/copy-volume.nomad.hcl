@@ -15,6 +15,17 @@ variable "chown" {
   description = "uid:gid passed to rsync --chown. Digits only."
 }
 
+variable "task_user" {
+  type        = string
+  default     = ""
+  description = "uid:gid the rsync task runs as. Empty keeps the image user."
+
+  validation {
+    condition     = var.task_user == "" || regex_replace(var.task_user, "^[0-9]+:[0-9]+$", "") == ""
+    error_message = "task_user must be empty or uid:gid digits."
+  }
+}
+
 variable "dest_subdir" {
   type        = string
   default     = ""
@@ -73,6 +84,38 @@ job "copy-volume" {
       read_only       = false
     }
 
+    # A fresh ext4 root is root:root 0755. Chown it before a non-root rsync starts.
+    dynamic "task" {
+      for_each = compact([var.task_user])
+      labels   = ["chown"]
+
+      content {
+        driver = "docker"
+
+        lifecycle {
+          hook    = "prestart"
+          sidecar = false
+        }
+
+        config {
+          image      = "instrumentisto/rsync-ssh:alpine3.23-r3"
+          entrypoint = ["/bin/sh"]
+          args       = ["-c", "chown ${var.task_user} /dest"]
+        }
+
+        volume_mount {
+          volume      = "dest"
+          destination = "/dest"
+          read_only   = false
+        }
+
+        resources {
+          cpu    = 50
+          memory = 32
+        }
+      }
+    }
+
     task "rsync" {
       driver = "docker"
 
@@ -81,6 +124,9 @@ job "copy-volume" {
         entrypoint = ["/bin/sh"]
         args       = ["/local/copy.sh"]
       }
+
+      # Docker treats an empty user as the image default, so this stays unset unless task_user is uid:gid.
+      user = var.task_user
 
       env {
         CHOWN       = var.chown
@@ -141,7 +187,12 @@ fi
 
 excludes=$${EXTRA_EXCLUDES:-}
 exclude_count=$${EXTRA_EXCLUDE_COUNT:-0}
-set -- rsync -aH --numeric-ids --delete --exclude=/lost+found --chown="$CHOWN"
+if [ "$(id -u)" -eq 0 ]; then
+  set -- rsync -aH --numeric-ids --delete --exclude=/lost+found --chown="$CHOWN"
+else
+  # A non-root rsync cannot chown. The process owner is the intended owner.
+  set -- rsync -aH --numeric-ids --delete --exclude=/lost+found
+fi
 if [ -n "$excludes" ] || [ "$exclude_count" != 0 ]; then
   n=0
   set -f
