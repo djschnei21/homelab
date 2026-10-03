@@ -21,8 +21,8 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
 - Node Exporter - OS-level metrics from each client node (system job)
 
 **Storage:**
-- NFS-backed CSI volumes hosted on TrueNAS server (nas2.local / 192.168.68.50)
-- PostgreSQL database for Alby Hub on same external server
+- iSCSI zvols under `homelab-general/nomad-csi` on TrueNAS (nas2.local / 192.168.68.50)
+- PostgreSQL database for Alby Hub on the same server
 
 ## Repository Structure
 
@@ -33,10 +33,10 @@ This is a Bitcoin infrastructure homelab using HashiCorp Nomad to orchestrate Bi
 - `nomad_jobs/` - Nomad job definitions (HCL)
   - `bitcoin/` - Bitcoin-related service jobs
   - `observability/` - Prometheus, Grafana, and node-exporter jobs
-  - `plugins/` - NFS CSI controller and node plugin jobs
+  - `plugins/` - democratic-csi iSCSI controller and node plugin jobs
 - `nomad_acl/policies/` - Least-privilege ACL policies for CI tokens
 - `nomad_namespaces/` - Namespace definitions (bitcoin-ns)
-- `nomad_volumes/` - CSI volume definitions for persistent storage
+- `nomad_volumes/` - iSCSI volume specs in `iscsi/`
 
 ## Commands
 
@@ -91,7 +91,7 @@ cd bootstrap/nomad && ansible-playbook -i ../inventory.yml nomad_cluster.yml
   `nomad/jobs/<job>/<group>/<task>`. A workload identity reads only its job, group, and task
   paths without a policy, and a job or group path is readable by every task under it.
 - All services use bridge networking with explicit port mappings
-- Volumes use `multi-node-single-writer` access mode for read-only sharing across tasks
+- Volumes are single-node-writer ext4 filesystems on iSCSI
 - Jobs define resource constraints (memory/CPU) and health checks
 - Use pinned image versions (e.g., `bitcoin:30.2`), not `latest`
 
@@ -143,29 +143,56 @@ The scheduler will place new allocations using the spread algorithm. This is dis
 Note: `nomad job eval -force-reschedule` does NOT move healthy allocations. You must
 use `nomad alloc stop` to force actual rescheduling.
 
-## TrueNAS Storage Management
+## Storage
 
-Storage is hosted on TrueNAS (nas2.local / 192.168.68.50). Manage datasets and NFS shares
-via SSH using the `midclt` command.
+Volumes are iSCSI zvols under `homelab-general/nomad-csi` on TrueNAS
+(nas2.local / 192.168.68.50). Create one with `scripts/nomad-volume-create.sh`
+from `nomad_volumes/iscsi/*.hcl`. Use a 24h storage-admin token. The policy and
+the mint command are in `nomad_acl/policies/storage-admin.hcl`. CHAP secrets
+live in `~/.nomad/iscsi-chap.env` on homelab-agent (mode 0600). The script
+writes them into a temporary spec. The files in git have none.
 
-**Create a dataset:**
 ```bash
-ssh dan@nas2.local 'midclt call pool.dataset.create "{\"name\": \"homelab-general/<dataset-name>\"}"'
+scripts/nomad-volume-create.sh nomad_volumes/iscsi/<name>.hcl
 ```
 
-**Create an NFS share:**
+## NAS maintenance
+
+Leave the iSCSI consumers running across a short NAS reboot. I/O pauses and
+resumes. A planned reboot of a few minutes is inside the 600s `iscsid`
+`replacement_timeout`. Stopping bitcoind starts a 1-3 hour mempool import and
+takes Alby down for longer than the reboot. An outage past 600s becomes ext4
+I/O errors. A NAS reboot takes cluster DNS (AdGuard) down with it.
+
+Scale these groups to 0 only when the outage will exceed 600s. `bitcoin-stack`
+is in `bitcoin`. `prometheus` and `tailscale-proxy` are in `default`. Scale
+the same groups back to 1 after the NAS is up.
+
 ```bash
-ssh dan@nas2.local 'midclt call sharing.nfs.create "{\"path\": \"/mnt/homelab-general/<dataset-name>\", \"comment\": \"<description>\", \"networks\": [\"192.168.68.0/24\"], \"mapall_user\": \"root\", \"mapall_group\": \"wheel\"}"'
+nomad job scale -namespace=bitcoin bitcoin-stack bitcoin 0
+nomad job scale -namespace=bitcoin bitcoin-stack electrs 0
+nomad job scale -namespace=bitcoin bitcoin-stack mempool 0
+nomad job scale -namespace=bitcoin bitcoin-stack albyhub 0
+nomad job scale -namespace=default prometheus prometheus 0
+nomad job scale -namespace=default prometheus grafana 0
+nomad job scale -namespace=default tailscale-proxy proxy 0
 ```
 
-**List existing NFS shares:**
+Do not upgrade TrueNAS to 26 until democratic-csi ships WebSocket (JSON-RPC)
+support. v1.9.5 is REST-only, and TrueNAS 25.10 REST needs the FULL_ADMIN
+`nomad-csi` key.
+
+Dead-client failover for the fenced groups (`bitcoin`, `albyhub`): confirm the
+Pi is powered off, then purge that node.
+
 ```bash
-ssh dan@nas2.local 'midclt call sharing.nfs.query' | jq
+nomad node purge <node-id>
 ```
 
-**Delete an NFS share (by ID):**
-```bash
-ssh dan@nas2.local 'midclt call sharing.nfs.delete <share-id>'
-```
+When bitcoind was stopped or moved, mempool import can take 1-3 hours. Alby's
+LDK will not sync until Electrs fee estimates work. Restart the `albyhub` task
+once bitcoind reports the mempool loaded.
 
-After creating storage, register a CSI volume in Nomad (see `nomad_volumes/` for examples).
+```bash
+nomad alloc restart -namespace=bitcoin -task albyhub <alloc-id>
+```
