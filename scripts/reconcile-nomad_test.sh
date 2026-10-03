@@ -160,8 +160,8 @@ cd "$ROOT"
 check "bitcoin namespace from file" assert_eq "$(namespace_for nomad_jobs/bitcoin/bitcoin-stack.nomad.hcl)" "bitcoin"
 check "observability namespace from file" assert_eq "$(namespace_for nomad_jobs/observability/prometheus.nomad.hcl)" "default"
 check "node-exporter namespace from file" assert_eq "$(namespace_for nomad_jobs/observability/node-exporter.nomad.hcl)" "default"
-check "plugins directory default" assert_eq "$(namespace_for nomad_jobs/plugins/nfs-nodes.nomad.hcl)" "default"
-check "plugins controller directory default" assert_eq "$(namespace_for nomad_jobs/plugins/nfs-controller.nomad.hcl)" "default"
+check "plugins directory default" assert_eq "$(namespace_for nomad_jobs/plugins/democratic-csi-iscsi-nodes.nomad.hcl)" "default"
+check "plugins controller directory default" assert_eq "$(namespace_for nomad_jobs/plugins/democratic-csi-iscsi-controller.nomad.hcl)" "default"
 check "tailscale directory default" assert_eq "$(namespace_for nomad_jobs/tailscale/tailscale-proxy.nomad.hcl)" "default"
 
 write_job "nomad_jobs/bitcoin/override.nomad.hcl" 'job "override" {
@@ -1059,8 +1059,11 @@ check "storage-admin does not register plugins" bash -c "! grep -q csi-register-
 check "storage-admin plugin and node are read" assert_eq \
   "$(grep -E '^[[:space:]]*policy[[:space:]]*=' "$SA")" \
   $'  policy = "read"\n  policy = "read"'
-check "reconcile comment names the democratic-csi jobs" \
-  grep -q 'democratic-csi-iscsi-controller' "$POL/ci-reconcile.hcl"
+check "reconcile comment names only the democratic-csi jobs" bash -c '
+  grep -q "democratic-csi-iscsi-controller" "$1" &&
+  grep -q "democratic-csi-iscsi-nodes" "$1" &&
+  ! grep -q "plugin-nfs" "$1"
+' bash "$POL/ci-reconcile.hcl"
 check "only ci-patch has a write policy" \
   assert_eq "$(grep -lE '^[[:space:]]*policy[[:space:]]*=[[:space:]]*"write"' "$POL"/*.hcl)" "$POL/ci-patch.hcl"
 check "ci-patch writes only nodes" \

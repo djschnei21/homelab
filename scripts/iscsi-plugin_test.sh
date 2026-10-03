@@ -26,6 +26,9 @@ lacks() { ! grep -q -- "$2" "$1"; }
 
 check "controller job name" grep -q '^job "democratic-csi-iscsi-controller"' "$CTRL"
 check "node job name" grep -q '^job "democratic-csi-iscsi-nodes"' "$NODE"
+check "nfs controller job file is gone" test ! -e "$ROOT/nomad_jobs/plugins/nfs-controller.nomad.hcl"
+check "nfs node job file is gone" test ! -e "$ROOT/nomad_jobs/plugins/nfs-nodes.nomad.hcl"
+check "volume specs live only under iscsi" bash -c '[[ -z $(find "$1" -mindepth 1 -maxdepth 1 -name "*.hcl" -print) ]]' bash "$ROOT/nomad_volumes"
 check "controller is not privileged" lacks "$CTRL" "privileged"
 check "controller uses https" grep -q 'protocol: https' "$CTRL"
 check "controller uses port 443" grep -q 'port: 443' "$CTRL"
