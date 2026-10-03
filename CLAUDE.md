@@ -158,9 +158,15 @@ scripts/nomad-volume-create.sh nomad_volumes/iscsi/<name>.hcl
 
 ## NAS maintenance
 
-Before a planned NAS reboot, scale every group of the iSCSI consumers to 0.
-`bitcoin-stack` is in `bitcoin`. `prometheus` and `tailscale-proxy` are in
-`default`.
+Leave the iSCSI consumers running across a short NAS reboot. I/O pauses and
+resumes. A planned reboot of a few minutes is inside the 600s `iscsid`
+`replacement_timeout`. Stopping bitcoind starts a 1-3 hour mempool import and
+takes Alby down for longer than the reboot. An outage past 600s becomes ext4
+I/O errors. A NAS reboot takes cluster DNS (AdGuard) down with it.
+
+Scale these groups to 0 only when the outage will exceed 600s. `bitcoin-stack`
+is in `bitcoin`. `prometheus` and `tailscale-proxy` are in `default`. Scale
+the same groups back to 1 after the NAS is up.
 
 ```bash
 nomad job scale -namespace=bitcoin bitcoin-stack bitcoin 0
@@ -171,10 +177,6 @@ nomad job scale -namespace=default prometheus prometheus 0
 nomad job scale -namespace=default prometheus grafana 0
 nomad job scale -namespace=default tailscale-proxy proxy 0
 ```
-
-Scale the same groups back to 1 after the NAS is up. `iscsid`
-`replacement_timeout` is 600s. An outage longer than that becomes ext4 I/O
-errors. A NAS reboot takes cluster DNS (AdGuard) down with it.
 
 Do not upgrade TrueNAS to 26 until democratic-csi ships WebSocket (JSON-RPC)
 support. v1.9.5 is REST-only, and TrueNAS 25.10 REST needs the FULL_ADMIN
@@ -187,9 +189,9 @@ Pi is powered off, then purge that node.
 nomad node purge <node-id>
 ```
 
-After bitcoind moves, mempool import can take 1-3 hours. Alby's LDK will not
-sync until Electrs fee estimates work. Restart the `albyhub` task once
-bitcoind reports the mempool loaded.
+When bitcoind was stopped or moved, mempool import can take 1-3 hours. Alby's
+LDK will not sync until Electrs fee estimates work. Restart the `albyhub` task
+once bitcoind reports the mempool loaded.
 
 ```bash
 nomad alloc restart -namespace=bitcoin -task albyhub <alloc-id>
