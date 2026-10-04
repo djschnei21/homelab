@@ -129,3 +129,37 @@
     name: iscsid
     enabled: true
     state: started
+
+# Do not notify Restart Nomad or Restart iscsid. Those handlers live in this
+# role, and a tagged run only reaches the tasks below, which do not notify
+# them. read_ahead_kb is a sysfs attribute; restarting Nomad, Docker, or
+# iscsid is not what applies it.
+- name: Install TrueNAS iSCSI readahead rule
+  ansible.builtin.template:
+    src: 99-truenas-iscsi-readahead.rules.j2
+    dest: /etc/udev/rules.d/99-truenas-iscsi-readahead.rules
+    owner: root
+    group: root
+    mode: "0644"
+  tags:
+    - iscsi_readahead
+
+- name: Reload udev rules
+  ansible.builtin.command:
+    argv: ["udevadm", "control", "--reload-rules"]
+  changed_when: false
+  tags:
+    - iscsi_readahead
+
+# Subsystem block only. A trigger without a match re-enumerates NICs.
+- name: Apply readahead to present block devices
+  ansible.builtin.command:
+    argv:
+      - udevadm
+      - trigger
+      - --action=change
+      - --subsystem-match=block
+      - --type=devices
+  changed_when: false
+  tags:
+    - iscsi_readahead

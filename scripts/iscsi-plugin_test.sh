@@ -71,8 +71,9 @@ declare -A CAPACITY=(
   [albyhub-work]=1GiB
   [grafana-db]=1GiB
   [tailscale-state]=1GiB
+  [mempool-data]=10GiB
 )
-for name in bitcoin-chain electrs-index albyhub-work prometheus-tsdb grafana-db tailscale-state; do
+for name in bitcoin-chain electrs-index albyhub-work prometheus-tsdb grafana-db tailscale-state mempool-data; do
   file="$VOL/${name}.hcl"
   size=${CAPACITY[$name]}
   check "${name} exists" test -f "$file"
@@ -84,7 +85,7 @@ for name in bitcoin-chain electrs-index albyhub-work prometheus-tsdb grafana-db 
   check "${name} is single-node-writer" grep -q 'access_mode     = "single-node-writer"' "$file"
   check "${name} is a filesystem" grep -q 'attachment_mode = "file-system"' "$file"
 done
-check "bitcoin volumes are in bitcoin" bash -c "grep -Eq 'namespace[[:space:]]+= \"bitcoin\"' '$VOL/bitcoin-chain.hcl' '$VOL/electrs-index.hcl' '$VOL/albyhub-work.hcl'"
+check "bitcoin volumes are in bitcoin" bash -c "grep -Eq 'namespace[[:space:]]+= \"bitcoin\"' '$VOL/bitcoin-chain.hcl' '$VOL/electrs-index.hcl' '$VOL/albyhub-work.hcl' '$VOL/mempool-data.hcl'"
 check "the other volumes are in default" bash -c "grep -Eq 'namespace[[:space:]]+= \"default\"' '$VOL/prometheus-tsdb.hcl' '$VOL/grafana-db.hcl' '$VOL/tailscale-state.hcl'"
 
 SCRATCH="$ROOT/tests/storage/csi-scratch.hcl"

@@ -10,3 +10,7 @@ docker_apt_key_fingerprints:
 # Set to about twice the measured NAS reboot. The 120s package default
 # turns a slow reboot into ext4 I/O errors.
 iscsi_replacement_timeout: 600
+
+# TrueNAS iSCSI disks advertise an 8 MB optimal I/O size, so the kernel sets
+# read_ahead_kb to 16384. LevelDB faults then read 16 MB per page over iSCSI.
+iscsi_read_ahead_kb: 128

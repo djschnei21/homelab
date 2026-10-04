@@ -3,7 +3,7 @@ job "bitcoin-stack" {
   namespace   = "bitcoin"
 
   meta {
-    version = "2026-10-02-v1"
+    version = "2026-10-04-v2"
   }
 
   # Bitcoin Core - base layer, no dependencies
@@ -76,11 +76,13 @@ fi
 # A move reloads mempool.dat by re-checking every saved transaction against
 # chainstate, which took 1-3 hours and blocked Alby. The mempool still lives
 # in RAM while bitcoind runs.
+# Host RAM would size dbcache to 1024 MiB. Pin it so the cgroup cannot move it.
 exec bitcoind \
   -datadir=/data \
   -server=1 \
   -txindex=1 \
   -persistmempool=0 \
+  -dbcache=1024 \
   -rpcbind=0.0.0.0 \
   -rpcport=8332 \
   -rpcallowip=0.0.0.0/0 \
@@ -107,10 +109,11 @@ EOS
       }
 
       resources {
-        # The 4096 MB limit counts the page cache, so chainstate and txindex were
-        # evicted and re-read over iSCSI at ~80 MB/s. 6144 leaves room for that cache.
-        memory = 6144
-        cpu    = 1500
+        # Reservation covers the 3620 MiB RSS peak and can schedule on either
+        # other client. memory_max keeps the 6144 MiB cgroup for page cache.
+        memory     = 4096
+        memory_max = 6144
+        cpu        = 2500
       }
 
       service {
@@ -198,20 +201,19 @@ EOF
 
       kill_timeout = "2m"
 
-      template {
-        data = <<EOF
-{{ range nomadService "bitcoin-rpc" }}
-BITCOIN_RPC={{ .Address }}:{{ .Port }}
-{{ end }}
-{{ range nomadService "bitcoin-p2p" }}
-BITCOIN_P2P={{ .Address }}:{{ .Port }}
-{{ end }}
-EOF
-        destination = "local/env.txt"
-        env         = true
+      # An empty service lookup used to leave ${BITCOIN_RPC} unset, and Nomad
+      # then failed the task as "Unknown variable", which does not restart.
+      # Missing addresses now make electrs exit, and this policy retries.
+      restart {
+        attempts = 10
+        interval = "30m"
+        delay    = "30s"
+        mode     = "delay"
       }
 
       # electrs v0.11.1 refuses auth as a flag or env var.
+      # Daemon addresses are in this file for the same reason: an empty
+      # nomadService range omits the lines instead of failing interpolation.
       template {
         destination = "${NOMAD_SECRETS_DIR}/electrs.conf"
         perms       = "0400"
@@ -219,6 +221,12 @@ EOF
         gid         = 3001
         data        = <<EOT
 auth = "{{ with nomadVar "nomad/jobs/bitcoin-stack/electrs/electrs" }}{{ .rpc_user }}:{{ .rpc_password }}{{ end }}"
+{{ range nomadService "bitcoin-rpc" }}
+daemon_rpc_addr = "{{ .Address }}:{{ .Port }}"
+{{ end }}
+{{ range nomadService "bitcoin-p2p" }}
+daemon_p2p_addr = "{{ .Address }}:{{ .Port }}"
+{{ end }}
 EOT
       }
 
@@ -228,8 +236,6 @@ EOT
           "--skip-default-conf-files",
           "--log-filters", "INFO",
           "--db-dir", "/opt/electrs",
-          "--daemon-rpc-addr", "${BITCOIN_RPC}",
-          "--daemon-p2p-addr", "${BITCOIN_P2P}",
           "--electrum-rpc-addr", "0.0.0.0:${NOMAD_PORT_electrs_rpc}",
           "--conf", "${NOMAD_SECRETS_DIR}/electrs.conf"
         ]
@@ -245,8 +251,10 @@ EOT
       }
 
       resources {
-        memory = 2048
-        cpu    = 1000
+        # Peak RSS is 867 MiB. The tx cache is unbounded, so the ceiling stays 2048.
+        memory     = 1280
+        memory_max = 2048
+        cpu        = 1000
       }
 
       service {
@@ -267,6 +275,15 @@ EOT
       delay_function = "exponential"
       max_delay      = "120s"
       unlimited      = false
+    }
+
+    # No disconnect fence. MariaDB and the backend cache can be re-indexed.
+    volume "mempool-data" {
+      type            = "csi"
+      read_only       = false
+      attachment_mode = "file-system"
+      access_mode     = "single-node-writer"
+      source          = "mempool-data"
     }
 
     network {
@@ -296,6 +313,10 @@ EOT
         image   = "busybox:1.38.0"
         command = "sh"
         args = ["-c", <<EOF
+# Backend runs as uid 1000. Create the cache dir before it starts.
+mkdir -p /data/cache
+chown 1000:0 /data/cache
+
 echo 'Waiting for mariadb...'
 until nc -z 127.0.0.1 3306; do
   echo 'mariadb not ready, retrying...'
@@ -337,6 +358,12 @@ EOF
         env         = true
       }
 
+      volume_mount {
+        volume      = "mempool-data"
+        destination = "/data"
+        read_only   = false
+      }
+
       resources {
         memory = 32
         cpu    = 50
@@ -354,7 +381,15 @@ EOF
 
       config {
         image = "mariadb:10.5.29"
+        # The entrypoint creates and chowns this directory to uid 999 as root.
+        args  = ["--datadir=/data/mysql"]
         ports = ["mariadb"]
+      }
+
+      volume_mount {
+        volume      = "mempool-data"
+        destination = "/data"
+        read_only   = false
       }
 
       template {
@@ -372,8 +407,10 @@ EOT
       }
 
       resources {
-        memory = 512
-        cpu    = 500
+        # Peak RSS is 144 MiB.
+        memory     = 256
+        memory_max = 512
+        cpu        = 500
       }
     }
 
@@ -414,6 +451,12 @@ EOT
         ports = ["backend"]
       }
 
+      volume_mount {
+        volume      = "mempool-data"
+        destination = "/data"
+        read_only   = false
+      }
+
       env {
         MEMPOOL_BACKEND      = "electrum"
         MEMPOOL_NETWORK      = "mainnet"
@@ -424,11 +467,15 @@ EOT
         DATABASE_DATABASE    = "mempool"
         DATABASE_USERNAME    = "mempool"
         STATISTICS_ENABLED   = "true"
+        MEMPOOL_CACHE_DIR    = "/data/cache"
       }
 
       resources {
-        memory = 2048
-        cpu    = 1000
+        # 2048 was the hard limit, and the task was OOM-killed. The ceiling
+        # is what ends that loop; the reservation stays at the old limit.
+        memory     = 2048
+        memory_max = 3072
+        cpu        = 1000
       }
 
       service {
@@ -461,8 +508,10 @@ EOT
       }
 
       resources {
-        memory = 256
-        cpu    = 200
+        # Peak RSS is 19 MiB.
+        memory     = 64
+        memory_max = 256
+        cpu        = 200
       }
 
       service {
@@ -586,8 +635,10 @@ EOF
       }
 
       resources {
-        cpu    = 500
-        memory = 1024
+        # RSS is 940 of 1024 MiB, and this task holds funds.
+        cpu        = 500
+        memory     = 1280
+        memory_max = 2048
       }
     }
 

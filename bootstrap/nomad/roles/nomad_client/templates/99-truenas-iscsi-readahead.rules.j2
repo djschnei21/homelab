@@ -1,0 +1,1 @@
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ENV{ID_VENDOR}=="TrueNAS", ENV{ID_MODEL}=="iSCSI_Disk", ATTR{queue/read_ahead_kb}="{{ iscsi_read_ahead_kb }}"
