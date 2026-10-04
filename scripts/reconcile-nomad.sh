@@ -5,14 +5,26 @@
 #   0   no allocations created or destroyed (a diff may still exist)
 #   1   allocations created or destroyed — changes, not a script failure
 #   255 error determining plan results
-# Exit 0 with an empty diff is a pass. A diff that lowers memory or CPU is not
-# submitted. An image change is not submitted when the numeric core decreases,
-# when an equal core changes suffix or build metadata, or when the tags differ
-# and the new tag is not a higher version (`latest`, or any tag that does not
-# parse). Identical tags, and a lone leading v on an otherwise identical tag,
-# are not downgrades. A higher core may change suffix. Any other real diff is
-# submitted with `nomad job run -check-index` and no -detach, so Nomad tracks
-# the deployment. Refused jobs still fail the run after every other job is handled.
+# Exit 0 with an empty diff is a pass. A diff that lowers MemoryMB, MemoryMaxMB,
+# or CPU is not submitted unless that job's decrease is declared. Removing
+# memory_max (MemoryMaxMB N => 0) is a decrease; adding it (0 => N) is not. An
+# image change is not submitted when the numeric core decreases, when an equal
+# core changes suffix or build metadata, or when the tags differ and the new
+# tag is not a higher version (`latest`, or any tag that does not parse).
+# Identical tags, and a lone leading v on an otherwise identical tag, are not
+# downgrades. A higher core may change suffix. A declaration never lets a
+# refused image change through. Any other real diff is submitted with
+# `nomad job run -check-index` and no -detach, so Nomad tracks the deployment.
+# Refused jobs still fail the run after every other job is handled.
+#
+# A decrease is declared per job name on its own line of a commit message:
+#
+#   Allow-Resource-Decrease: <job>[, <job>...]
+#
+# A push run reads every commit in RECONCILE_BEFORE..RECONCILE_AFTER. Put the
+# line in a commit on the PR branch, not in the PR body. A squash commit's body
+# is the branch's commit messages, and merge or rebase keeps the commits. A
+# manual run takes the same job list in RECONCILE_ALLOW_DECREASE.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -175,6 +187,7 @@ numeric_core_is_higher() {
   return 1
 }
 
+# MemoryMaxMB 0 means no memory_max, so the hard limit falls back to MemoryMB.
 resource_line_is_downgrade() {
   local line="$1" old new
   if [[ "$line" =~ (^|[[:space:]])(CPU|MemoryMB|MemoryMaxMB)[[:space:]]*:[[:space:]]*\"([0-9]+)\"[[:space:]]*=\>[[:space:]]*\"([0-9]+)\" ]]; then
@@ -230,21 +243,95 @@ image_line_is_downgrade() {
   return 1
 }
 
-plan_is_downgrade() {
+plan_image_downgrade() {
   local plan_file="$1" line
   while IFS= read -r line || [[ -n "$line" ]]; do
-    if resource_line_is_downgrade "$line" || image_line_is_downgrade "$line"; then
-      line="${line#"${line%%[![:space:]]*}"}"
-      printf '%s\n' "$line"
+    if image_line_is_downgrade "$line"; then
+      printf '%s\n' "${line#"${line%%[![:space:]]*}"}"
       return 0
     fi
   done <"$plan_file"
   return 1
 }
 
-# Prints one of: noop | apply <index> | refuse | error <reason>
+plan_resource_decreases() {
+  local plan_file="$1" line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if resource_line_is_downgrade "$line"; then
+      printf '%s\n' "${line#"${line%%[![:space:]]*}"}"
+    fi
+  done <"$plan_file"
+}
+
+DECREASE_JOBS=()
+
+# The key is case-insensitive, as in a git trailer, but the line can sit
+# anywhere in the message: a squash commit lists each branch commit's body
+# under its subject.
+decrease_trailer_values() {
+  local line key
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    key="${line%%:*}"
+    if [[ "$line" == *:* && "${key,,}" == allow-resource-decrease ]]; then
+      printf '%s\n' "${line#*:}"
+    fi
+  done
+}
+
+# Nomad job IDs hold no spaces, so commas and whitespace both separate names.
+add_decrease_jobs() {
+  local name
+  local -a names=()
+  IFS=$', \t\r' read -r -a names <<<"$1"
+  for name in "${names[@]}"; do
+    [[ -z "$name" ]] && continue
+    if [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      DECREASE_JOBS+=("$name")
+    else
+      gh_notice "ignored Allow-Resource-Decrease entry: ${name}"
+    fi
+  done
+}
+
+# A range that cannot be read declares nothing, so decreases stay refused.
+# The notice is the only record a run leaves of what it read: the Actions log
+# is not readable from outside the LAN.
+load_decrease_declarations() {
+  local before="${RECONCILE_BEFORE:-}" after="${RECONCILE_AFTER:-}" messages value source=""
+  local sha='^[0-9a-f]{40}([0-9a-f]{24})?$'
+  DECREASE_JOBS=()
+  if [[ -n "$before" || -n "$after" ]]; then
+    if [[ "$before" =~ $sha && "$after" =~ $sha && ! "$before" =~ ^0+$ ]] &&
+      messages="$(git log --format=%B "${before}..${after}" 2>/dev/null)"; then
+      while IFS= read -r value; do
+        add_decrease_jobs "$value"
+      done < <(decrease_trailer_values <<<"$messages")
+      source="commits ${before:0:12}..${after:0:12}"
+    else
+      gh_notice "cannot read commits ${before:0:12}..${after:0:12}; no resource decrease declared by commit"
+    fi
+  fi
+  if [[ -n "${RECONCILE_ALLOW_DECREASE:-}" ]]; then
+    add_decrease_jobs "$RECONCILE_ALLOW_DECREASE"
+    source="${source:+${source} and }dispatch input"
+  fi
+  gh_notice "resource decrease declared for: ${DECREASE_JOBS[*]:-none}${source:+ (from ${source})}"
+}
+
+decrease_declared() {
+  local name
+  for name in "${DECREASE_JOBS[@]}"; do
+    if [[ "$name" == "$1" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Prints one of: noop | apply <index> | refuse <line> | error <reason>
+# A third argument of 1 lets MemoryMB, MemoryMaxMB, and CPU decrease.
 plan_decision() {
-  local rc="$1" plan_file="$2" index="" has_diff=0
+  local rc="$1" plan_file="$2" allow_decrease="${3:-0}" index="" has_diff=0
   local indexes=()
 
   if [[ "$rc" -ne 0 && "$rc" -ne 1 ]]; then
@@ -276,11 +363,17 @@ plan_decision() {
     return 0
   fi
 
-  # Refused when main would move memory, CPU, or an image backward, or when an
-  # image change cannot be proved equal or higher.
+  # Refused when main would move an image backward, or when an image change
+  # cannot be proved equal or higher, whatever is declared. Memory and CPU
+  # may move backward only when declared.
   local reason=""
-  if reason="$(plan_is_downgrade "$plan_file")"; then
+  if reason="$(plan_image_downgrade "$plan_file")"; then
     printf 'refuse %s\n' "$reason"
+    return 0
+  fi
+  reason="$(plan_resource_decreases "$plan_file")"
+  if [[ -n "$reason" && "$allow_decrease" != 1 ]]; then
+    printf 'refuse %s\n' "${reason%%$'\n'*}"
     return 0
   fi
 
@@ -350,6 +443,7 @@ print_failure_diagnostics() {
 # Returns 0 on success, 1 on plan error, 10 on deployment failure.
 reconcile_one() {
   local file="$1" ns plan_file plan_rc decision index run_rc plan_err=""
+  local job="" allow_decrease=0 decreases="" line
   echo "==> ${file}"
 
   if ! ns="$(namespace_for "$file")"; then
@@ -368,7 +462,13 @@ reconcile_one() {
   redact <"$plan_file"
 
   plan_err="$(grep -m1 -E 'Error|error|failed' "$plan_file" || true)"
-  decision="$(plan_decision "$plan_rc" "$plan_file")"
+  if job="$(job_name_from_file "$file")" && decrease_declared "$job"; then
+    allow_decrease=1
+  fi
+  decision="$(plan_decision "$plan_rc" "$plan_file" "$allow_decrease")"
+  if [[ "$allow_decrease" -eq 1 && "$decision" == apply\ * ]]; then
+    decreases="$(plan_resource_decreases "$plan_file")"
+  fi
   rm -f "$plan_file"
 
   case "$decision" in
@@ -380,8 +480,12 @@ reconcile_one() {
       index="${decision#apply }"
       ;;
     refuse*)
-      echo "refused downgrade: ${file}: ${decision#refuse }"
-      ci_error "refused downgrade: ${file}: ${decision#refuse }"
+      line="${decision#refuse }"
+      if resource_line_is_downgrade "$line"; then
+        line="${line}; declare it with Allow-Resource-Decrease: ${job:-<job>}"
+      fi
+      echo "refused downgrade: ${file}: ${line}"
+      ci_error "refused downgrade: ${file}: ${line}"
       return 1
       ;;
     error\ *)
@@ -393,6 +497,12 @@ reconcile_one() {
       return 1
       ;;
   esac
+
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      gh_notice "allowed resource decrease for job ${job} (${file}): ${line}"
+    fi
+  done <<<"$decreases"
 
   echo "submitting ${file} -check-index ${index}"
   local run_out
@@ -407,8 +517,7 @@ reconcile_one() {
   if [[ "$run_rc" -ne 0 ]]; then
     ci_error "deployment failed: ${file} (nomad job run exit ${run_rc}) $(tail -n 1 "$run_out")"
     rm -f "$run_out"
-    local job
-    if job="$(job_name_from_file "$file")"; then
+    if [[ -n "$job" ]]; then
       print_failure_diagnostics "$ns" "$job" || true
     fi
     return 10
@@ -486,6 +595,8 @@ main() {
   if [[ -n "${RECONCILE_STATUS:-}" ]]; then
     note_cluster_status "${files[@]}"
   fi
+
+  load_decrease_declarations
 
   for file in "${files[@]}"; do
     # reconcile_one toggles set -e internally; an OR list keeps a non-zero
