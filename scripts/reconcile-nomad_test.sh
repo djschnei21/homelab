@@ -92,6 +92,14 @@ nomad() {
           printf '%s\n' '+/- Job: "okup"' '      +/- image: "ghcr.io/getalby/hub:v1.21.4" => "ghcr.io/getalby/hub:v1.24.0"' '      +/- MemoryMB: "512" => "1024"' '' 'Scheduler dry-run:' '- All tasks successfully allocated.' '' 'Job Modify Index: 30'
           return 0
           ;;
+        *shrink.nomad.hcl)
+          printf '%s\n' '+/- Job: "shrink"' '+/- Task Group: "g" (1 in-place update)' '  +/- Task: "t" (forces in-place update)' '    +/- Resources {' '      +/- CPU: "1500" => "500"' '      +/- MemoryMB: "4096" => "2048"' '      +/- MemoryMaxMB: "8192" => "0"' '        }' '' 'Scheduler dry-run:' '- All tasks successfully allocated.' '' 'Job Modify Index: 41'
+          return 0
+          ;;
+        *trim.nomad.hcl)
+          printf '%s\n' '+/- Job: "trim"' '      +/- MemoryMB: "1024" => "512"' '' 'Scheduler dry-run:' '- All tasks successfully allocated.' '' 'Job Modify Index: 42'
+          return 0
+          ;;
         *)
           echo "unexpected plan spec $spec" >&2
           return 97
@@ -184,7 +192,7 @@ plan_of() {
   local rc="$1" text="$2" f
   f="$(mktemp)"
   printf '%s\n' "$text" >"$f"
-  plan_decision "$rc" "$f"
+  plan_decision "$rc" "$f" "${3:-0}"
   rm -f "$f"
 }
 
@@ -223,6 +231,39 @@ check "unparseable tag change is refused" assert_refuse "$(plan_of 0 $'+/- image
 check "build metadata rollback is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:1.24.0+build.5" => "app:1.21.4+build.9"\n\nJob Modify Index: 5')" 'image: "app:1.24.0+build.5" => "app:1.21.4+build.9"'
 check "image downgrade with memory upgrade is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:2.0" => "app:1.0"\n+/- MemoryMB: "256" => "512"\n\nJob Modify Index: 5')" 'image: "app:2.0" => "app:1.0"'
 check "annotated image upgrade still applies" assert_eq "$(plan_of 0 $'+/- image:           "bitcoin/bitcoin:30.2" => "bitcoin/bitcoin:31.1" (forces create/destroy update)\n\nJob Modify Index: 5')" "apply 5"
+check "adding memory max is an increase" assert_eq "$(plan_of 0 $'+/- MemoryMaxMB: "0" => "8192"\n\nJob Modify Index: 5')" "apply 5"
+check "removing memory max is a decrease" assert_refuse "$(plan_of 0 $'+/- MemoryMaxMB: "8192" => "0"\n\nJob Modify Index: 5')" 'MemoryMaxMB: "8192" => "0"'
+check "declared decrease applies" assert_eq "$(plan_of 0 $'+/- CPU: "1500" => "500"\n+/- MemoryMB: "4096" => "2048"\n+/- MemoryMaxMB: "8192" => "0"\n\nJob Modify Index: 5' 1)" "apply 5"
+check "declared decrease still needs a check index" assert_eq "$(plan_of 0 $'+/- MemoryMB: "4096" => "2048"' 1)" "error missing-check-index"
+check "declared image downgrade is refused" assert_refuse "$(plan_of 0 $'+/- MemoryMB: "4096" => "2048"\n+/- image: "app:2.0" => "app:1.0"\n\nJob Modify Index: 5' 1)" 'image: "app:2.0" => "app:1.0"'
+check "declared pin to latest is refused" assert_refuse "$(plan_of 0 $'+/- image: "app:1.2.3" => "app:latest"\n\nJob Modify Index: 5' 1)" 'image: "app:1.2.3" => "app:latest"'
+
+# Job names from Allow-Resource-Decrease lines in a commit message, space-joined.
+trailer_jobs() {
+  local value
+  DECREASE_JOBS=()
+  while IFS= read -r value; do
+    add_decrease_jobs "$value" >&2
+  done < <(decrease_trailer_values <<<"$1")
+  printf '%s\n' "${DECREASE_JOBS[*]}"
+}
+SQUASH_MSG='Shrink jobs (#30)
+
+* Shrink jobs
+
+Allow-Resource-Decrease: shrink, downgrade
+
+* Fix a typo
+
+Co-authored-by: Test <test@example.invalid>'
+check "trailer survives a squash commit body" assert_eq "$(trailer_jobs "$SQUASH_MSG")" "shrink downgrade"
+check "trailer key is case-insensitive" assert_eq "$(trailer_jobs 'allow-resource-decrease: a b')" "a b"
+check "trailer lines accumulate" assert_eq "$(trailer_jobs $'Allow-Resource-Decrease: a\nAllow-Resource-Decrease: b,c')" "a b c"
+check "indented, mid-line, or misspelled keys are not trailers" assert_eq \
+  "$(trailer_jobs $'  Allow-Resource-Decrease: a\nSee Allow-Resource-Decrease: b\nAllow-Resource-Decreases: c\n* Allow-Resource-Decrease: d')" ""
+check "trailer entries that are not job names are dropped" \
+  assert_eq "$(trailer_jobs 'Allow-Resource-Decrease: ok, $(id), a;b' 2>/dev/null)" "ok"
+check "empty trailer declares nothing" assert_eq "$(trailer_jobs 'Allow-Resource-Decrease:')" ""
 
 rm -rf "$TMP/tree/nomad_jobs"
 : >"$CALLS"
@@ -276,6 +317,85 @@ check "downgrade was not submitted" bash -c "! grep -q 'job run .*downgrade.noma
 check "non-downgrade still submitted after refusal" grep -q "job run -check-index 30 -namespace=default -no-color nomad_jobs/plugins/z-okup.nomad.hcl" "$CALLS"
 check "downgrade run did not pass detach" bash -c "! grep -q -- '-detach' '$CALLS'"
 
+# Pushed ranges are read from a scratch repo at the tree root.
+tgit() { git -C "$TMP/tree" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false "$@"; }
+tgit init -q
+tgit commit -q --allow-empty -m "Base"
+RANGE_BASE="$(tgit rev-parse HEAD)"
+tgit commit -q --allow-empty -m "$SQUASH_MSG"
+RANGE_SHRINK="$(tgit rev-parse HEAD)"
+tgit commit -q --allow-empty -m "Unrelated change"
+RANGE_LATER="$(tgit rev-parse HEAD)"
+
+: >"$CALLS"
+rm -rf "$TMP/tree/nomad_jobs"
+write_job "nomad_jobs/plugins/a-shrink.nomad.hcl" 'job "shrink" { group "g" {} }'
+write_job "nomad_jobs/plugins/b-trim.nomad.hcl" 'job "trim" { group "g" {} }'
+write_job "nomad_jobs/plugins/c-downgrade.nomad.hcl" 'job "downgrade" { group "g" {} }'
+LOG="$TMP/declared.log"
+set +e
+( RECONCILE_BEFORE="$RANGE_BASE" RECONCILE_AFTER="$RANGE_SHRINK" GITHUB_ACTIONS=1 main >"$LOG" 2>&1 )
+main_rc=$?
+set -e
+check "refusals still fail a run with declared decreases" assert_eq "$main_rc" "1"
+check "declared jobs are a checks notice" \
+  grep -qF "::notice::resource decrease declared for: shrink downgrade (from commits ${RANGE_BASE:0:12}..${RANGE_SHRINK:0:12})" "$LOG"
+check "declared decrease is submitted" grep -q "job run -check-index 41 -namespace=default -no-color nomad_jobs/plugins/a-shrink.nomad.hcl" "$CALLS"
+for want in 'CPU: "1500" => "500"' 'MemoryMB: "4096" => "2048"' 'MemoryMaxMB: "8192" => "0"'; do
+  check "allowed decrease notice names the job and ${want%%:*}" \
+    grep -qF "::notice::allowed resource decrease for job shrink (nomad_jobs/plugins/a-shrink.nomad.hcl): +/- ${want}" "$LOG"
+done
+check "declaring one job does not allow another" bash -c "! grep -q 'job run .*b-trim.nomad.hcl' '$CALLS'"
+check "undeclared refusal names the trailer to add" \
+  grep -qF '::error::refused downgrade: nomad_jobs/plugins/b-trim.nomad.hcl: +/- MemoryMB: "1024" => "512"; declare it with Allow-Resource-Decrease: trim' "$LOG"
+check "declared image downgrade is not submitted" bash -c "! grep -q 'job run .*c-downgrade.nomad.hcl' '$CALLS'"
+check "declared image downgrade is refused on the image" \
+  grep -qF '::error::refused downgrade: nomad_jobs/plugins/c-downgrade.nomad.hcl: +/- image: "bitcoin/bitcoin:31.1" => "bitcoin/bitcoin:30.2"' "$LOG"
+check "image refusal does not offer a declaration" assert_file_lacks "$LOG" "Allow-Resource-Decrease: downgrade"
+check "refused job gets no allowed-decrease notice" assert_file_lacks "$LOG" "allowed resource decrease for job downgrade"
+
+: >"$CALLS"
+rm -rf "$TMP/tree/nomad_jobs"
+write_job "nomad_jobs/plugins/a-shrink.nomad.hcl" 'job "shrink" { group "g" {} }'
+write_job "nomad_jobs/plugins/z-okup.nomad.hcl" 'job "okup" { group "g" {} }'
+LOG="$TMP/undeclared.log"
+set +e
+( RECONCILE_BEFORE="$RANGE_SHRINK" RECONCILE_AFTER="$RANGE_LATER" GITHUB_ACTIONS=1 main >"$LOG" 2>&1 )
+main_rc=$?
+set -e
+check "undeclared decrease fails the run" assert_eq "$main_rc" "1"
+check "undeclared decrease is refused" \
+  grep -qF '::error::refused downgrade: nomad_jobs/plugins/a-shrink.nomad.hcl: +/- CPU: "1500" => "500"; declare it with Allow-Resource-Decrease: shrink' "$LOG"
+check "undeclared decrease is not submitted" bash -c "! grep -q 'job run .*a-shrink.nomad.hcl' '$CALLS'"
+check "a declaration before the pushed range does not count" \
+  grep -qF "::notice::resource decrease declared for: none (from commits ${RANGE_SHRINK:0:12}..${RANGE_LATER:0:12})" "$LOG"
+check "other jobs still apply beside an undeclared decrease" grep -q "job run -check-index 30 -namespace=default -no-color nomad_jobs/plugins/z-okup.nomad.hcl" "$CALLS"
+
+: >"$CALLS"
+LOG="$TMP/badrange.log"
+set +e
+( RECONCILE_BEFORE="$(printf 'f%.0s' {1..40})" RECONCILE_AFTER="$RANGE_SHRINK" GITHUB_ACTIONS=1 main >"$LOG" 2>&1 )
+main_rc=$?
+set -e
+check "unreadable range fails on the decrease" assert_eq "$main_rc" "1"
+check "unreadable range is a checks notice" grep -qF '::notice::cannot read commits ffffffffffff..' "$LOG"
+check "unreadable range declares nothing" bash -c "! grep -q 'job run .*a-shrink.nomad.hcl' '$CALLS'"
+check "unreadable range notices no declaration" grep -qxF '::notice::resource decrease declared for: none' "$LOG"
+
+: >"$CALLS"
+rm -rf "$TMP/tree/nomad_jobs"
+write_job "nomad_jobs/plugins/a-shrink.nomad.hcl" 'job "shrink" { group "g" {} }'
+LOG="$TMP/dispatch.log"
+set +e
+( RECONCILE_BEFORE="" RECONCILE_AFTER="" RECONCILE_ALLOW_DECREASE=" other-job, shrink " GITHUB_ACTIONS=1 main >"$LOG" 2>&1 )
+main_rc=$?
+set -e
+check "dispatch input decrease exits 0" assert_eq "$main_rc" "0"
+check "dispatch input jobs are a checks notice" grep -qxF '::notice::resource decrease declared for: other-job shrink (from dispatch input)' "$LOG"
+check "dispatch input allows the decrease" grep -q "job run -check-index 41 -namespace=default -no-color nomad_jobs/plugins/a-shrink.nomad.hcl" "$CALLS"
+check "dispatch input decrease is noticed" \
+  grep -qF '::notice::allowed resource decrease for job shrink (nomad_jobs/plugins/a-shrink.nomad.hcl): +/- MemoryMB: "4096" => "2048"' "$LOG"
+
 : >"$CALLS"
 rm -rf "$TMP/tree/nomad_jobs"
 write_job "nomad_jobs/plugins/noop.nomad.hcl" 'job "noop" { group "g" {} }'
@@ -319,6 +439,16 @@ check "workflow comment tracks deployment" grep -q 'until the deployment succeed
 check "workflow shares the cluster lock" grep -q 'group: homelab-cluster' "$WF"
 check "workflow records registered tasks" grep -q 'RECONCILE_STATUS: "1"' "$WF"
 check "workflow turns off nomad CLI hints" grep -q 'NOMAD_CLI_SHOW_HINTS: "0"' "$WF"
+check "workflow fetches history for the pushed range" grep -q 'fetch-depth: 0' "$WF"
+check "workflow passes the pushed range" bash -c "grep -qF 'RECONCILE_BEFORE: \${{ github.event.before }}' '$WF' && grep -qF 'RECONCILE_AFTER: \${{ github.event.after }}' '$WF'"
+check "workflow dispatch takes the decrease input" awk '
+  /^  workflow_dispatch:/ { in_dispatch = 1; next }
+  in_dispatch && /^  [^ ]/ { in_dispatch = 0 }
+  in_dispatch && /^      allow_resource_decrease:$/ { found = 1 }
+  END { exit !found }
+' "$WF"
+check "workflow passes the decrease input" grep -qF 'RECONCILE_ALLOW_DECREASE: ${{ inputs.allow_resource_decrease }}' "$WF"
+check "workflow expressions reach the script only through env" bash -c "! grep -F '\${{' '$WF' | grep -vqE '^ +RECONCILE_[A-Z_]+: \\$\\{\\{ [a-z_.]+ \\}\\}$'"
 
 PATCH="$ROOT/.github/workflows/patch-infra.yml"
 check "patch workflow has no pull_request" bash -c "! grep -q pull_request '$PATCH'"

@@ -54,6 +54,16 @@ commands. CI reads `$HOME/.nomad/reconcile.token` (reconcile) and `$HOME/.nomad/
 (patch workflows) on the runner and runs without a token when the file is absent. The
 Ansible playbooks pass `NOMAD_TOKEN` to the `nomad` commands they run on the Pis.
 
+Reconcile CI refuses a plan that lowers `MemoryMB`, `MemoryMaxMB` (including removing
+`memory_max`), or `CPU` unless the job is declared, and refuses an image downgrade even
+then. Declare it on its own line in a commit message on the PR branch, not the PR body,
+which never reaches main. Only commits in the pushed range count. A squash commit's body
+is the branch's commit messages, so keep the line if you edit the squash message. A
+manual run takes the same job list in the `allow_resource_decrease` input.
+```text
+Allow-Resource-Decrease: bitcoin-stack, prometheus
+```
+
 **Deploy a Nomad job:**
 ```bash
 nomad job run -namespace=bitcoin nomad_jobs/bitcoin/bitcoin-stack.nomad.hcl

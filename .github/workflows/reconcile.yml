@@ -9,6 +9,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      allow_resource_decrease:
+        description: Jobs allowed to lower memory, memory_max, or CPU (comma-separated)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -32,6 +37,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The pushed range is read for Allow-Resource-Decrease lines.
+          fetch-depth: 0
 
       # The file holds only the ci-reconcile secret (nomad_acl/policies/).
       # No file means ACLs are still off, so the run goes on without a token.
@@ -52,5 +60,11 @@ jobs:
           echo "NOMAD_TOKEN=${token}" >>"$GITHUB_ENV"
           echo "::notice::loaded Nomad token from ${token_file}"
 
+      # The range is empty on a manual run and the input is empty on a push.
+      # Passed through env so neither value becomes shell source.
       - name: Reconcile Nomad jobs
+        env:
+          RECONCILE_BEFORE: ${{ github.event.before }}
+          RECONCILE_AFTER: ${{ github.event.after }}
+          RECONCILE_ALLOW_DECREASE: ${{ inputs.allow_resource_decrease }}
         run: scripts/reconcile-nomad.sh
