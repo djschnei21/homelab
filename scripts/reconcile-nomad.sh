@@ -592,8 +592,11 @@ main() {
     exit 1
   fi
 
+  # A status run does nothing else. Actions keeps only the first ten notices
+  # of a step, so these would crowd out the reconcile's decrease notices.
   if [[ -n "${RECONCILE_STATUS:-}" ]]; then
     note_cluster_status "${files[@]}"
+    exit 0
   fi
 
   load_decrease_declarations
