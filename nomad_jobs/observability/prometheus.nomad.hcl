@@ -188,8 +188,10 @@ EOF
       }
 
       resources {
-        cpu    = 300
-        memory = 512
+        # OOM-killed once when 512 MiB was the hard limit. Peak RSS was 497 MiB.
+        cpu        = 300
+        memory     = 512
+        memory_max = 768
       }
     }
 
