@@ -73,10 +73,14 @@ if [ -z "$rpcauth" ] || [ -z "$rpcauth_electrs" ]; then
   echo "bitcoind rpcauth is not set" >&2
   exit 1
 fi
+# A move reloads mempool.dat by re-checking every saved transaction against
+# chainstate, which took 1-3 hours and blocked Alby. The mempool still lives
+# in RAM while bitcoind runs.
 exec bitcoind \
   -datadir=/data \
   -server=1 \
   -txindex=1 \
+  -persistmempool=0 \
   -rpcbind=0.0.0.0 \
   -rpcport=8332 \
   -rpcallowip=0.0.0.0/0 \
@@ -103,7 +107,9 @@ EOS
       }
 
       resources {
-        memory = 4096
+        # The 4096 MB limit counts the page cache, so chainstate and txindex were
+        # evicted and re-read over iSCSI at ~80 MB/s. 6144 leaves room for that cache.
+        memory = 6144
         cpu    = 1500
       }
 
