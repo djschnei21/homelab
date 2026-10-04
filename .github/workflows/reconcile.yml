@@ -27,9 +27,6 @@ env:
   NOMAD_ADDR: http://192.168.68.65:4646
   # The CLI appends Web UI hint lines to table output.
   NOMAD_CLI_SHOW_HINTS: "0"
-  # Print registered images into the check. The Actions log store is blocked
-  # from outside the LAN.
-  RECONCILE_STATUS: "1"
 
 jobs:
   reconcile:
@@ -59,6 +56,14 @@ jobs:
           echo "::add-mask::${token}"
           echo "NOMAD_TOKEN=${token}" >>"$GITHUB_ENV"
           echo "::notice::loaded Nomad token from ${token_file}"
+
+      # Print registered images into the check. The Actions log store is blocked
+      # from outside the LAN. A step keeps only its first ten notices, so this
+      # is not the reconcile step.
+      - name: Record registered jobs
+        env:
+          RECONCILE_STATUS: "1"
+        run: scripts/reconcile-nomad.sh
 
       # The range is empty on a manual run and the input is empty on a push.
       # Passed through env so neither value becomes shell source.

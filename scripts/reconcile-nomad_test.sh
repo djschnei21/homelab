@@ -407,6 +407,9 @@ set -e
 check "status probe exits 0" assert_eq "$main_rc" "0"
 check "node status noticed" grep -q '::notice::node ' "$LOG"
 check "registered task noticed" grep -q '::notice::registered bitcoin-stack/bitcoind image=bitcoin/bitcoin:31.1' "$LOG"
+check "status probe plans nothing" bash -c "! grep -q 'job plan' '$CALLS'"
+check "status probe reads no declarations" assert_file_lacks "$LOG" "resource decrease declared"
+check "reconcile run records no status" bash -c "! grep -qE '::notice::(node|registered) ' '$TMP/declared.log'"
 
 : >"$CALLS"
 rm -rf "$TMP/tree/nomad_jobs"
@@ -438,6 +441,13 @@ check "workflow sets nomad addr" grep -q 'NOMAD_ADDR: http://192.168.68.65:4646'
 check "workflow comment tracks deployment" grep -q 'until the deployment succeeds' "$WF"
 check "workflow shares the cluster lock" grep -q 'group: homelab-cluster' "$WF"
 check "workflow records registered tasks" grep -q 'RECONCILE_STATUS: "1"' "$WF"
+# Actions keeps the first ten notices of a step. The registered tasks alone
+# fill that, so they must not share the reconcile step.
+check "only the status step records registered tasks" awk '
+  /^      - name: / { step = $0 }
+  /RECONCILE_STATUS:/ { n++; if (step !~ /- name: Record registered jobs$/) bad = 1 }
+  END { exit (bad || n != 1) }
+' "$WF"
 check "workflow turns off nomad CLI hints" grep -q 'NOMAD_CLI_SHOW_HINTS: "0"' "$WF"
 check "workflow fetches history for the pushed range" grep -q 'fetch-depth: 0' "$WF"
 check "workflow passes the pushed range" bash -c "grep -qF 'RECONCILE_BEFORE: \${{ github.event.before }}' '$WF' && grep -qF 'RECONCILE_AFTER: \${{ github.event.after }}' '$WF'"
@@ -821,6 +831,8 @@ step_precedes() {
   ' "$1"
 }
 check "reconcile loads the token before nomad runs" step_precedes "$WF" "Load Nomad token" "Reconcile Nomad jobs"
+check "reconcile loads the token before recording status" step_precedes "$WF" "Load Nomad token" "Record registered jobs"
+check "reconcile records status before it reconciles" step_precedes "$WF" "Record registered jobs" "Reconcile Nomad jobs"
 check "patch loads the token before the playbook" step_precedes "$PATCH" "Load Nomad token" "Patch Nomad hosts"
 check "post-reboot check loads the token before nomad runs" step_precedes "$READY" "Load Nomad token" "Confirm Nomad nodes are ready"
 check "post-reboot check checks out the readiness script" step_precedes "$READY" "Checkout" "Confirm Nomad nodes are ready"
