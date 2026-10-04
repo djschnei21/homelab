@@ -76,7 +76,8 @@ while oversubscription is off. Turning it on does nothing to a task that leaves
 bitcoind reserves 4096 MB and may use 6144 MB (`-dbcache=1024` is pinned; host
 RAM would pick the same number). In the normal layout each other client keeps
 enough unreserved memory for that 4096 MB reservation, so a drain can move
-bitcoind. electrs reserves 1280 MB with a 2048 MB ceiling. The mempool backend
+bitcoind. electrs reserves 1024 MB with a 2048 MB ceiling. Prometheus reserves
+256 MB with a 512 MB ceiling. The mempool backend
 reserves 2048 MB with a 3072 MB ceiling. MariaDB reserves 256 MB, the frontend
 64 MB, and Alby Hub 1280 MB with a 2048 MB ceiling. Grafana reserves 512 MB
 with a 768 MB ceiling.

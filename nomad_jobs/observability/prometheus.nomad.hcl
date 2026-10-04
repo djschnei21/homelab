@@ -99,8 +99,10 @@ EOF
       }
 
       resources {
-        cpu    = 500
-        memory = 512
+        # Peak RSS is 124 MiB. memory_max keeps the old 512 MiB hard limit.
+        cpu        = 500
+        memory     = 256
+        memory_max = 512
       }
     }
 
