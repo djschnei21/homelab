@@ -251,8 +251,10 @@ EOT
       }
 
       resources {
-        # Peak RSS is 867 MiB. The tx cache is unbounded, so the ceiling stays 2048.
-        memory     = 1280
+        # Peak RSS is 867 MiB. 1024 keeps that peak inside the reservation and
+        # leaves pinode2 room for bitcoind's 4096. The tx cache is unbounded,
+        # so the ceiling stays 2048.
+        memory     = 1024
         memory_max = 2048
         cpu        = 1000
       }
