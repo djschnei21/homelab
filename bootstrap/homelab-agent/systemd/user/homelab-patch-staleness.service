@@ -1,0 +1,6 @@
+[Unit]
+Description=Fail if patch-infra.yml has no success in the last 8 days
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -c 'import json, subprocess, sys\nfrom datetime import datetime, timedelta, timezone\np = subprocess.run(["/usr/bin/gh", "run", "list", "-R", "djschnei21/homelab", "--workflow", "patch-infra.yml", "--limit", "20", "--json", "conclusion,updatedAt,event"], capture_output=True, text=True)\nif p.returncode != 0:\n    print("homelab-patch-staleness: gh run list failed", flush=True)\n    sys.exit(1)\ntry:\n    runs = json.loads(p.stdout)\nexcept json.JSONDecodeError:\n    print("homelab-patch-staleness: gh run list failed", flush=True)\n    sys.exit(1)\nif not isinstance(runs, list):\n    print("homelab-patch-staleness: gh run list failed", flush=True)\n    sys.exit(1)\ncutoff = datetime.now(timezone.utc) - timedelta(days=8)\nfresh = False\nfor r in runs:\n    if r.get("conclusion") != "success" or not r.get("updatedAt"):\n        continue\n    updated = datetime.fromisoformat(r["updatedAt"].replace("Z", "+00:00"))\n    if updated >= cutoff:\n        fresh = True\n        break\nif fresh:\n    print("homelab-patch-staleness: success within 8 days", flush=True)\n    sys.exit(0)\nprint("homelab-patch-staleness: no success within 8 days", flush=True)\nsys.exit(1)\n'

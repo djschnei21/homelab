@@ -154,6 +154,8 @@ cleaning up comments) without changing the functional config.
 cd bootstrap/nomad && ansible-playbook -i ../inventory.yml playbooks/patch_cluster.yml
 ```
 
+The weekly run is the homelab-agent user timer `homelab-patch-dispatch.timer` at Monday 00:00 America/New_York. It dispatches `patch-infra.yml` on `main`. There is no GitHub cron; a `schedule:` trigger must not be added back.
+
 The playbook handles rolling updates safely:
 1. Pre-flight check verifies cluster health
 2. Clients patched one-by-one: drain (15m deadline) → apt upgrade → reboot if needed → rejoin
