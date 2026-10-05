@@ -1183,8 +1183,11 @@ else
 fi
 
 POL="$ROOT/nomad_acl/policies"
-# storage-admin scales and creates volumes. It cannot submit jobs: a submitted
-# job's workload identity would read every variable under nomad/jobs/.
+# storage-admin scales and creates volumes. dan-ui stops and restarts
+# allocations from the UI. Neither is in ci_policies_lack: both grant
+# alloc-lifecycle, and storage-admin also writes volumes. Neither can submit
+# jobs: a submitted job's workload identity would read every variable under
+# nomad/jobs/.
 ci_policies_lack() {
   ! grep -hv '^[[:space:]]*#' "$POL/ci-reconcile.hcl" "$POL/ci-patch.hcl" | grep -Eq "$1"
 }
@@ -1201,6 +1204,18 @@ check "storage-admin does not register plugins" bash -c "! grep -q csi-register-
 check "storage-admin plugin and node are read" assert_eq \
   "$(grep -E '^[[:space:]]*policy[[:space:]]*=' "$SA")" \
   $'  policy = "read"\n  policy = "read"'
+UI="$POL/dan-ui.hcl"
+check "dan-ui header applies the policy" grep -q \
+  'nomad acl policy apply -description "Dan Nomad UI" dan-ui nomad_acl/policies/dan-ui.hcl' "$UI"
+check "dan-ui secret goes to dan-ui.token" grep -q '> ~/.nomad/dan-ui.token)' "$UI"
+check "dan-ui token has no TTL" bash -c "! grep -q -- '-ttl' '$UI'"
+check "dan-ui cannot submit, exec, or scale" bash -c "! grep -Eq '\"(plan-job|register-job|submit-job|alloc-exec|alloc-node-exec|scale-job|dispatch-job)\"' '$UI'"
+for cap in list-jobs read-job read-logs alloc-lifecycle; do
+  check "dan-ui ${cap} in both namespaces" assert_eq "$(grep -c "\"${cap}\"" "$UI")" "2"
+done
+check "dan-ui node agent and plugin are read" assert_eq \
+  "$(grep -cE '^[[:space:]]*policy[[:space:]]*=[[:space:]]*"read"' "$UI")" "3"
+check "dan-ui has no write policy" bash -c "! grep -Eq '^[[:space:]]*policy[[:space:]]*=[[:space:]]*\"write\"' '$UI'"
 check "reconcile comment names only the democratic-csi jobs" bash -c '
   grep -q "democratic-csi-iscsi-controller" "$1" &&
   grep -q "democratic-csi-iscsi-nodes" "$1" &&
