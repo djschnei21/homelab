@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily homelab patch staleness check at 09:00 America/New_York
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 America/New_York
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

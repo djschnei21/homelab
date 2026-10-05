@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly homelab patch dispatch at Monday 00:00 America/New_York
+
+[Timer]
+OnCalendar=Mon *-*-* 00:00:00 America/New_York
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Dispatch homelab patch-infra.yml on main
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/gh workflow run patch-infra.yml --repo djschnei21/homelab --ref main

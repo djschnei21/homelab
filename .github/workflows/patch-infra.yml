@@ -3,11 +3,11 @@ name: Patch cluster hosts
 # Self-hosted because GitHub-hosted runners cannot reach the Pis.
 # Job specs deploy through reconcile.yml. This play dist-upgrades and reboots,
 # so it does not run on push. Merge does not start it.
+# The schedule is the homelab-agent user timer homelab-patch-dispatch.timer,
+# Monday 00:00 America/New_York. A GitHub schedule must not be added back.
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "17 8 * * 1"
 
 permissions:
   contents: read
