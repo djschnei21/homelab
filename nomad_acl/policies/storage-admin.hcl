@@ -5,10 +5,9 @@
 # key and the bitcoind and electrs items are written with the bootstrap token
 # too.
 #
-# Apply with the bootstrap token. Mint a 24h token per session. Do not write
-# that secret into a workflow file.
+# Reconcile applies this file from main. Mint a 24h token per session with
+# the bootstrap token. Do not write that secret into a workflow file.
 #
-#   nomad acl policy apply -description "Storage admin" storage-admin nomad_acl/policies/storage-admin.hcl
 #   nomad acl token create -name storage-admin -type client -ttl=24h \
 #     -policy storage-admin -t '{{ .SecretID }}'
 #

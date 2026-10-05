@@ -449,6 +449,9 @@ check "only the status step records registered tasks" awk '
   END { exit (bad || n != 1) }
 ' "$WF"
 check "workflow turns off nomad CLI hints" grep -q 'NOMAD_CLI_SHOW_HINTS: "0"' "$WF"
+check "workflow reads the management token file" grep -q '/home/agent/.nomad-management-token' "$WF"
+check "workflow does not delete ACL policies" bash -c "! grep -q 'policy delete' '$WF'"
+check "workflow does not mint ACL tokens" bash -c "! grep -q 'token create' '$WF'"
 check "workflow fetches history for the pushed range" grep -q 'fetch-depth: 0' "$WF"
 check "workflow passes the pushed range" bash -c "grep -qF 'RECONCILE_BEFORE: \${{ github.event.before }}' '$WF' && grep -qF 'RECONCILE_AFTER: \${{ github.event.after }}' '$WF'"
 check "workflow dispatch takes the decrease input" awk '
@@ -832,7 +835,114 @@ step_precedes() {
 }
 check "reconcile loads the token before nomad runs" step_precedes "$WF" "Load Nomad token" "Reconcile Nomad jobs"
 check "reconcile loads the token before recording status" step_precedes "$WF" "Load Nomad token" "Record registered jobs"
+check "reconcile loads the token before applying policies" step_precedes "$WF" "Load Nomad token" "Apply ACL policies"
+check "reconcile applies policies before jobs" step_precedes "$WF" "Apply ACL policies" "Reconcile Nomad jobs"
 check "reconcile records status before it reconciles" step_precedes "$WF" "Record registered jobs" "Reconcile Nomad jobs"
+
+# Apply ACL policies step. A child bash so the test's nomad() function is not
+# used. The management token replaces the reconcile token for that process
+# only. GITHUB_ENV is the reconcile token and must stay unchanged.
+INHERITED_TOKEN="11111111-1111-4111-8111-111111111111"
+acl_apply_run() {
+  local tree="$1" token_file="$2"
+  local work="$TMP/acl-run" calls bin envfile script
+  rm -rf "$work"
+  mkdir -p "$work/bin"
+  calls="$work/calls"
+  bin="$work/bin"
+  envfile="$work/github_env"
+  : >"$calls"
+  printf 'NOMAD_TOKEN=%s\n' "$INHERITED_TOKEN" >"$envfile"
+  cp "$envfile" "$envfile.orig"
+  cat >"$bin/nomad" <<EOF
+#!/usr/bin/env bash
+printf 'seen-token=%s\n' "\${NOMAD_TOKEN-}" >>"$calls"
+printf '%s\n' "\$*" >>"$calls"
+EOF
+  chmod +x "$bin/nomad"
+  script="$(workflow_step_script "$WF" 'Apply ACL policies')"
+  [[ -n "$script" ]]
+  set +e
+  (
+    cd "$tree"
+    PATH="$bin:$PATH" \
+      NOMAD_TOKEN="$INHERITED_TOKEN" \
+      NOMAD_MANAGEMENT_TOKEN_FILE="$token_file" \
+      GITHUB_ENV="$envfile" \
+      bash -c "$script"
+  ) >"$work/out" 2>"$work/err"
+  local rc=$?
+  set -e
+  ACL_RC="$rc"
+  ACL_CALLS="$calls"
+  ACL_OUT="$work/out"
+  ACL_ERR="$work/err"
+  ACL_ENV="$envfile"
+  ACL_ENV_ORIG="$envfile.orig"
+}
+acl_output_hides_secrets() {
+  ! grep -F -e "$FAKE_TOKEN" -e "$INHERITED_TOKEN" -e 'PLAINTEXT-SECRET' "$ACL_OUT" "$ACL_ERR" |
+    grep -vF '::add-mask::' | grep -q .
+}
+acl_env_unchanged() {
+  cmp -s "$ACL_ENV" "$ACL_ENV_ORIG"
+}
+policy_step_lacks() {
+  ! grep -q "$1" <<<"$(workflow_step_script "$WF" 'Apply ACL policies')"
+}
+check "workflow applies ACL policies from git" test -n "$(workflow_step_script "$WF" 'Apply ACL policies')"
+check "policy apply step drops the reconcile token" grep -q 'unset NOMAD_TOKEN' <<<"$(workflow_step_script "$WF" 'Apply ACL policies')"
+check "policy apply step does not write GITHUB_ENV" policy_step_lacks 'GITHUB_ENV'
+check "policy apply step does not delete policies" policy_step_lacks 'policy delete'
+check "policy apply step does not mint tokens" policy_step_lacks 'token create'
+
+ACL_TREE="$TMP/acl-tree"
+mkdir -p "$ACL_TREE/nomad_acl/policies"
+printf 'namespace "default" {}\n' >"$ACL_TREE/nomad_acl/policies/present.hcl"
+printf 'namespace "default" {}\n' >"$ACL_TREE/nomad_acl/policies/removed.hcl"
+rm -f "$ACL_TREE/nomad_acl/policies/removed.hcl"
+printf 'NOMAD_TOKEN=%s\n' "$FAKE_TOKEN" >"$TMP/mgmt-token"
+acl_apply_run "$ACL_TREE" "$TMP/mgmt-token"
+check "a policy file is applied" grep -qx 'acl policy apply -description from git present nomad_acl/policies/present.hcl' "$ACL_CALLS"
+check "applied policy uses the management token" grep -qx "seen-token=${FAKE_TOKEN}" "$ACL_CALLS"
+check "a removed policy file is not deleted" bash -c "! grep -q 'policy delete' '$ACL_CALLS' && ! grep -q removed '$ACL_CALLS'"
+check "policy apply announces the policy name" grep -qx 'applied ACL policy present' "$ACL_OUT"
+check "policy apply hides the management token" acl_output_hides_secrets
+check "policy apply keeps the reconcile token for later steps" acl_env_unchanged
+check "policy apply ignores the inherited reconcile token" bash -c "! grep -q '$INHERITED_TOKEN' '$ACL_CALLS'"
+
+acl_apply_run "$ROOT" "$TMP/mgmt-token"
+check "every git policy file is applied" bash -c '
+  root="$1" calls="$2"
+  n=0
+  for file in "$root"/nomad_acl/policies/*.hcl; do
+    name="$(basename "$file" .hcl)"
+    grep -qx "acl policy apply -description from git ${name} nomad_acl/policies/${name}.hcl" "$calls" || exit 1
+    n=$((n + 1))
+  done
+  [[ "$n" -ge 1 ]]
+  [[ "$(grep -c "^acl policy apply " "$calls")" -eq "$n" ]]
+  ! grep -q "policy delete" "$calls"
+' bash "$ROOT" "$ACL_CALLS"
+
+acl_apply_run "$ACL_TREE" "$TMP/mgmt-token-missing"
+check "missing management token fails policy apply" assert_eq "$ACL_RC" "1"
+check "missing management token names the file" grep -q 'is missing; ACL policies were not applied' "$ACL_OUT"
+check "missing management token does not call nomad" assert_eq "$(wc -c <"$ACL_CALLS" | tr -d ' ')" "0"
+
+printf 'NOMAD_TOKEN=PLAINTEXT-SECRET\n' >"$TMP/mgmt-bad"
+acl_apply_run "$ACL_TREE" "$TMP/mgmt-bad"
+check "malformed management token fails policy apply" assert_eq "$ACL_RC" "1"
+check "malformed management token is not printed" acl_output_hides_secrets
+check "malformed management token does not call nomad" assert_eq "$(wc -c <"$ACL_CALLS" | tr -d ' ')" "0"
+check "malformed management token says what the file must hold" grep -q 'must contain NOMAD_TOKEN=<secret>' "$ACL_OUT"
+
+mkdir -p "$TMP/acl-empty/nomad_acl/policies"
+printf 'NOMAD_TOKEN=%s\n' "$FAKE_TOKEN" >"$TMP/mgmt-token"
+acl_apply_run "$TMP/acl-empty" "$TMP/mgmt-token"
+check "empty policy directory fails policy apply" assert_eq "$ACL_RC" "1"
+check "empty policy directory does not call nomad" assert_eq "$(wc -c <"$ACL_CALLS" | tr -d ' ')" "0"
+check "empty policy directory names the directory" grep -q 'no ACL policies under nomad_acl/policies/' "$ACL_OUT"
 check "patch loads the token before the playbook" step_precedes "$PATCH" "Load Nomad token" "Patch Nomad hosts"
 check "post-reboot check loads the token before nomad runs" step_precedes "$READY" "Load Nomad token" "Confirm Nomad nodes are ready"
 check "post-reboot check checks out the readiness script" step_precedes "$READY" "Checkout" "Confirm Nomad nodes are ready"
@@ -1205,8 +1315,12 @@ check "storage-admin plugin and node are read" assert_eq \
   "$(grep -E '^[[:space:]]*policy[[:space:]]*=' "$SA")" \
   $'  policy = "read"\n  policy = "read"'
 UI="$POL/dan-ui.hcl"
-check "dan-ui header applies the policy" grep -q \
-  'nomad acl policy apply -description "Dan Nomad UI" dan-ui nomad_acl/policies/dan-ui.hcl' "$UI"
+check "policy headers do not apply a checkout copy" bash -c "! grep -q 'nomad acl policy apply' '$POL'/*.hcl"
+check "policy headers say reconcile applies from main" bash -c '
+  for file in "$1"/*.hcl; do
+    grep -q "from main" "$file" || exit 1
+  done
+' bash "$POL"
 check "dan-ui secret goes to dan-ui.token" grep -q '> ~/.nomad/dan-ui.token)' "$UI"
 check "dan-ui token has no TTL" bash -c "! grep -q -- '-ttl' '$UI'"
 check "dan-ui cannot submit, exec, or scale" bash -c "! grep -Eq '\"(plan-job|register-job|submit-job|alloc-exec|alloc-node-exec|scale-job|dispatch-job)\"' '$UI'"

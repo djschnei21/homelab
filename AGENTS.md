@@ -47,8 +47,11 @@ With ACLs enabled, every command also needs a token. The anonymous token gets no
 ```bash
 export NOMAD_TOKEN="$(cat ~/.nomad/<name>.token)"   # file holds only the secret ID
 ```
-Policies live in `nomad_acl/policies/`; each file's header has its apply and token-create
-commands. `dan-ui` is Dan's read-plus-alloc-lifecycle UI token. CI reads
+Policies live in `nomad_acl/policies/`. Reconcile applies every `*.hcl` there
+from main; do not apply a checkout copy. The apply step reads
+`/home/agent/.nomad-management-token` (`NOMAD_TOKEN=<secret>`) and does not
+mint tokens. Each header has its token-create command. `dan-ui` is Dan's
+read-plus-alloc-lifecycle UI token. CI reads
 `$HOME/.nomad/reconcile.token` (reconcile) and `$HOME/.nomad/patch.token`
 (patch workflows) on the runner and runs without a token when the file is absent. The
 Ansible playbooks pass `NOMAD_TOKEN` to the `nomad` commands they run on the Pis.

@@ -2,7 +2,8 @@ name: Reconcile Nomad jobs
 
 # Self-hosted because GitHub-hosted runners cannot reach Nomad.
 # Restarts are applied. The run is not detached: Nomad tracks the job
-# until the deployment succeeds.
+# until the deployment succeeds. ACL policies in nomad_acl/policies/ are
+# applied from this checkout.
 
 on:
   push:
@@ -56,6 +57,46 @@ jobs:
           echo "::add-mask::${token}"
           echo "NOMAD_TOKEN=${token}" >>"$GITHUB_ENV"
           echo "::notice::loaded Nomad token from ${token_file}"
+
+      # ci-reconcile cannot write ACL. This step is the only reader of the
+      # management token file (NOMAD_TOKEN=<secret>, mode 0600). It does not
+      # export that secret, mint a token, or delete a policy removed from git.
+      - name: Apply ACL policies
+        run: |
+          set -euo pipefail
+          unset NOMAD_TOKEN
+          token_file="${NOMAD_MANAGEMENT_TOKEN_FILE:-/home/agent/.nomad-management-token}"
+          if [[ ! -e "$token_file" ]]; then
+            echo "::error::${token_file} is missing; ACL policies were not applied"
+            exit 1
+          fi
+          if [[ ! -r "$token_file" ]]; then
+            echo "::error::${token_file} is not readable; ACL policies were not applied"
+            exit 1
+          fi
+          mapfile -t token_lines <"$token_file"
+          if [[ "${#token_lines[@]}" -ne 1 ]] || [[ ! "${token_lines[0]}" =~ ^NOMAD_TOKEN=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$ ]]; then
+            echo "::error::${token_file} must contain NOMAD_TOKEN=<secret>"
+            exit 1
+          fi
+          token="${BASH_REMATCH[1]}"
+          echo "::add-mask::${token}"
+          export NOMAD_TOKEN="$token"
+          shopt -s nullglob
+          policies=(nomad_acl/policies/*.hcl)
+          if [[ ${#policies[@]} -eq 0 ]]; then
+            echo "::error::no ACL policies under nomad_acl/policies/"
+            exit 1
+          fi
+          for file in "${policies[@]}"; do
+            name="$(basename "$file" .hcl)"
+            if [[ ! "$name" =~ ^[a-z0-9-]+$ ]]; then
+              echo "::error::${file} is not a safe ACL policy name"
+              exit 1
+            fi
+            nomad acl policy apply -description "from git" "$name" "$file"
+            echo "applied ACL policy ${name}"
+          done
 
       # Print registered images into the check. The Actions log store is blocked
       # from outside the LAN. A step keeps only its first ten notices, so this

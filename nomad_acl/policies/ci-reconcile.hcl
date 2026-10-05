@@ -1,8 +1,7 @@
 # Token for .github/workflows/reconcile.yml (scripts/reconcile-nomad.sh).
-# Apply with a management token. Mint the token on the runner host so the
-# secret goes straight into the file the workflow reads:
+# Reconcile applies this file from main. Mint the token on the runner host
+# so the secret goes straight into the file the workflow reads:
 #
-#   nomad acl policy apply -description "CI job reconcile" ci-reconcile nomad_acl/policies/ci-reconcile.hcl
 #   (umask 077; mkdir -p ~/.nomad && nomad acl token create -name ci-reconcile -type client \
 #     -policy ci-reconcile -t '{{ .SecretID }}' > ~/.nomad/reconcile.token)
 #
