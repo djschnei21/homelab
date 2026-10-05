@@ -452,6 +452,12 @@ check "workflow turns off nomad CLI hints" grep -q 'NOMAD_CLI_SHOW_HINTS: "0"' "
 check "workflow reads the management token file" grep -q '/home/agent/.nomad-management-token' "$WF"
 check "workflow does not delete ACL policies" bash -c "! grep -q 'policy delete' '$WF'"
 check "workflow does not mint ACL tokens" bash -c "! grep -q 'token create' '$WF'"
+check "acl policy apply is gated to main" awk '
+  /- name: Apply ACL policies$/ { in_step = 1; next }
+  in_step && /^        if: github\.ref == '\''refs\/heads\/main'\''$/ { found = 1; next }
+  in_step && /^        run:/ { exit !found }
+  END { exit !found }
+' "$WF"
 check "workflow fetches history for the pushed range" grep -q 'fetch-depth: 0' "$WF"
 check "workflow passes the pushed range" bash -c "grep -qF 'RECONCILE_BEFORE: \${{ github.event.before }}' '$WF' && grep -qF 'RECONCILE_AFTER: \${{ github.event.after }}' '$WF'"
 check "workflow dispatch takes the decrease input" awk '
