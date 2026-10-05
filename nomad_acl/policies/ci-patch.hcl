@@ -1,9 +1,8 @@
 # Token for .github/workflows/patch-infra.yml, patch-ready.yml, and
-# bootstrap/nomad/playbooks/patch_cluster.yml. Apply with a management token.
-# Mint the token on the runner host so the secret goes straight into the file
-# the workflows read:
+# bootstrap/nomad/playbooks/patch_cluster.yml. Reconcile applies this file
+# from main. Mint the token on the runner host so the secret goes straight
+# into the file the workflows read:
 #
-#   nomad acl policy apply -description "CI host patch" ci-patch nomad_acl/policies/ci-patch.hcl
 #   (umask 077; mkdir -p ~/.nomad && nomad acl token create -name ci-patch -type client \
 #     -policy ci-patch -t '{{ .SecretID }}' > ~/.nomad/patch.token)
 #
