@@ -1,0 +1,76 @@
+---
+# bcm2712 base dtparams, not the pwm-fan or rpi-poe overlays. Firmware reads
+# config.txt at boot. patch_cluster.yml reboots when /var/run/reboot-required
+# exists; it does not read reboot-required.pkgs. The pkgs line is the Debian
+# companion list, so the reason sits next to the flag the weekly patch checks.
+
+- name: Check for /proc/device-tree/model
+  ansible.builtin.stat:
+    path: /proc/device-tree/model
+  register: pi_fan_model_stat
+  tags:
+    - pi_fan
+
+- name: Read /proc/device-tree/model
+  ansible.builtin.slurp:
+    src: /proc/device-tree/model
+  register: pi_fan_model_raw
+  when: pi_fan_model_stat.stat.exists
+  tags:
+    - pi_fan
+
+- name: Record the board model
+  ansible.builtin.set_fact:
+    pi_fan_model: "{{ (pi_fan_model_raw.content | default('') | b64decode | regex_replace('\\x00', '') | trim) }}"
+  tags:
+    - pi_fan
+
+- name: Skip the fan curve when this is not a Raspberry Pi 5
+  ansible.builtin.debug:
+    msg: "Skipping Pi 5 fan curve; /proc/device-tree/model is '{{ pi_fan_model }}'"
+  when: not pi_fan_model.startswith('Raspberry Pi 5')
+  tags:
+    - pi_fan
+
+- name: Render the Pi 5 fan curve
+  ansible.builtin.set_fact:
+    pi_fan_config_block: |-
+      {% for step in pi_fan_curve -%}
+      dtparam=fan_temp{{ loop.index0 }}={{ step.temp }}
+      dtparam=fan_temp{{ loop.index0 }}_hyst={{ step.hyst }}
+      dtparam=fan_temp{{ loop.index0 }}_speed={{ step.speed }}
+      {% endfor %}
+  when: pi_fan_model.startswith('Raspberry Pi 5')
+  tags:
+    - pi_fan
+
+- name: Write the Pi 5 fan curve into config.txt
+  ansible.builtin.blockinfile:
+    path: /boot/firmware/config.txt
+    marker: "# {mark} ANSIBLE MANAGED BLOCK pi_fan"
+    block: "{{ pi_fan_config_block }}"
+    create: false
+  when: pi_fan_model.startswith('Raspberry Pi 5')
+  register: pi_fan_config
+  tags:
+    - pi_fan
+
+# Only after the block actually changes. A later run leaves an existing
+# reboot flag in place until the node reboots and /var/run is cleared.
+- name: Mark the node reboot-required after a fan curve change
+  when: pi_fan_config is changed
+  tags:
+    - pi_fan
+  block:
+    - name: Touch /var/run/reboot-required
+      ansible.builtin.file:
+        path: /var/run/reboot-required
+        state: touch
+        mode: "0644"
+
+    - name: Record raspi-firmware-config in reboot-required.pkgs
+      ansible.builtin.lineinfile:
+        path: /var/run/reboot-required.pkgs
+        line: raspi-firmware-config
+        create: true
+        mode: "0644"

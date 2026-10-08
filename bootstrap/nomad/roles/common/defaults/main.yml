@@ -8,3 +8,21 @@ hashicorp_apt_key_fingerprints:
   - D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
   # Previous signing key, valid until 2028-01-09.
   - 798AEC654E5C15428C8E42EEAA16FCBCA621E701
+
+# Pi 5 bcm2712 base dtparams (overlays/README, "Pi5 only"): fan_temp0..3,
+# fan_tempN_hyst, fan_tempN_speed. Millicelsius and PWM 0-255. The fan is
+# off below the first step and at the top of this curve at the 80 C
+# soft-throttle point. Firmware reads them from config.txt at boot.
+pi_fan_curve:
+  - temp: 70000
+    hyst: 5000
+    speed: 75
+  - temp: 73000
+    hyst: 5000
+    speed: 125
+  - temp: 76000
+    hyst: 5000
+    speed: 175
+  - temp: 80000
+    hyst: 5000
+    speed: 250

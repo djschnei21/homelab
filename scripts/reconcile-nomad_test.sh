@@ -1232,6 +1232,38 @@ check "server role still removes docker" \
   bash -c "grep -qx docker-ce <<<'$(role_packages "$ROLES/nomad_server/tasks/main.yml" absent)'"
 check "no role removes a package common installs" no_role_removes_common_packages
 
+FAN="$ROLES/common/tasks/pi_fan.yml"
+check "common role imports the fan tasks" grep -q 'import_tasks: pi_fan.yml' "$COMMON"
+check "common role tags the Pi fan curve" grep -q -- '- pi_fan' "$FAN"
+check "Pi fan curve is a marked config block" grep -q 'ansible.builtin.blockinfile:' "$FAN"
+check "Pi fan curve edits firmware config.txt" grep -q 'path: /boot/firmware/config.txt' "$FAN"
+check "Pi fan curve marker is the pi_fan block" grep -q 'ANSIBLE MANAGED BLOCK pi_fan' "$FAN"
+check "Pi fan curve writes fan_temp dtparams" grep -q 'dtparam=fan_temp{{ loop.index0 }}={{ step.temp }}' "$FAN"
+check "Pi fan curve writes fan_temp hysteresis" grep -q 'dtparam=fan_temp{{ loop.index0 }}_hyst={{ step.hyst }}' "$FAN"
+check "Pi fan curve writes fan_temp speed" grep -q 'dtparam=fan_temp{{ loop.index0 }}_speed={{ step.speed }}' "$FAN"
+check "Pi fan curve is the defaults list" grep -q 'for step in pi_fan_curve' "$FAN"
+check "Pi fan curve starts at 70 C and is full at 80 C" awk '
+  /^pi_fan_curve:/ { in_list = 1; next }
+  in_list && /^[^[:space:]#]/ { in_list = 0 }
+  in_list && /^[[:space:]]+- temp:/ { temp[++n] = $3 }
+  in_list && /^[[:space:]]+hyst:/ { hyst[n] = $2 }
+  in_list && /^[[:space:]]+speed:/ { speed[n] = $2 }
+  END {
+    got = temp[1] " " hyst[1] " " speed[1] " / " temp[2] " " hyst[2] " " speed[2] " / " temp[3] " " hyst[3] " " speed[3] " / " temp[4] " " hyst[4] " " speed[4]
+    want = "70000 5000 75 / 73000 5000 125 / 76000 5000 175 / 80000 5000 250"
+    if (n != 4 || got != want) {
+      print "got:  " got > "/dev/stderr"
+      print "want: " want > "/dev/stderr"
+      exit 1
+    }
+  }
+' "$ROLES/common/defaults/main.yml"
+check "Pi fan curve applies only to Raspberry Pi 5" grep -q "startswith('Raspberry Pi 5')" "$FAN"
+check "Pi fan curve reads the device-tree model" grep -q '/proc/device-tree/model' "$FAN"
+check "Pi fan curve flags reboot-required for the weekly patch" grep -q 'path: /var/run/reboot-required' "$FAN"
+check "Pi fan curve records raspi-firmware-config" grep -q 'raspi-firmware-config' "$FAN"
+check "Pi fan role does not call the reboot module" bash -c "! grep -RInE '^[[:space:]]*(ansible\\.builtin\\.)?reboot:' '$ROLES/common' --include='*.yml'"
+
 # The shared keyring tasks, run for real on this machine against a file:// URL
 # and a keyring in a temp directory.
 if command -v ansible-playbook >/dev/null 2>&1 && command -v gpg >/dev/null 2>&1; then
