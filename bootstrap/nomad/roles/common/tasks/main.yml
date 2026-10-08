@@ -48,3 +48,8 @@
   service:
     name: nomad
     enabled: yes
+
+- name: Configure the Pi 5 fan curve
+  ansible.builtin.import_tasks: pi_fan.yml
+  tags:
+    - pi_fan

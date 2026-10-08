@@ -129,6 +129,20 @@ does not notify Restart Nomad or Restart iscsid, and it does not install
 Docker or Nomad, so those restarts cannot run. A full playbook run still
 restarts Nomad when `client.hcl` changes.
 
+The Pi 5 fan curve lives in the common role (`pi_fan_curve` in
+`defaults/main.yml`). The fan stays off until 70 C and is at full speed at
+80 C. Apply only that work with:
+
+```bash
+cd bootstrap/nomad && ansible-playbook -i ../inventory.yml nomad_cluster.yml --tags pi_fan
+```
+
+The tag writes a marked block in `/boot/firmware/config.txt`. The curve takes
+effect at the next reboot. When the block changes, the role creates
+`/var/run/reboot-required`. The weekly patch reboots a node when that file
+exists, so Monday's run applies the curve. The role runs only where
+`/proc/device-tree/model` starts with `Raspberry Pi 5`.
+
 ## Key Patterns
 
 - Services discover each other via Nomad service templates using `nomadService` lookups
