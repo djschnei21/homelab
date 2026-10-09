@@ -470,6 +470,8 @@ EOT
         DATABASE_USERNAME    = "mempool"
         STATISTICS_ENABLED   = "true"
         MEMPOOL_CACHE_DIR    = "/data/cache"
+        # V8's default heap is far under memory_max, and the process abort at ~1.5 GiB does not look like a cgroup OOM.
+        NODE_OPTIONS         = "--max-old-space-size=2560"
       }
 
       resources {
