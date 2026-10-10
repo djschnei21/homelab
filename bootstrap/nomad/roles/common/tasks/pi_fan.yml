@@ -1,6 +1,9 @@
 ---
 # bcm2712 base dtparams, not the pwm-fan or rpi-poe overlays. Firmware reads
-# config.txt at boot. patch_cluster.yml reboots when /var/run/reboot-required
+# config.txt at boot and does not start the fan PWM until a tach probe
+# succeeds. RPM 0 leaves cooling_fan disabled and GPIO45 high, so the fan
+# runs full speed. cooling_fan=on in this block forces the driver. The role
+# does not reboot. patch_cluster.yml reboots when /var/run/reboot-required
 # exists; it does not read reboot-required.pkgs. The pkgs line is the Debian
 # companion list, so the reason sits next to the flag the weekly patch checks.
 
@@ -35,6 +38,7 @@
 - name: Render the Pi 5 fan curve
   ansible.builtin.set_fact:
     pi_fan_config_block: |-
+      dtparam=cooling_fan={{ pi_fan_cooling_fan }}
       {% for step in pi_fan_curve -%}
       dtparam=fan_temp{{ loop.index0 }}={{ step.temp }}
       dtparam=fan_temp{{ loop.index0 }}_hyst={{ step.hyst }}

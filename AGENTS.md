@@ -130,8 +130,9 @@ Docker or Nomad, so those restarts cannot run. A full playbook run still
 restarts Nomad when `client.hcl` changes.
 
 The Pi 5 fan curve lives in the common role (`pi_fan_curve` in
-`defaults/main.yml`). The fan stays off until 70 C and is at full speed at
-80 C. Apply only that work with:
+`defaults/main.yml`). The same marked block contains `dtparam=cooling_fan=on`.
+The fan stays off until 70 C and is at full speed at 80 C. Apply only that
+work with:
 
 ```bash
 cd bootstrap/nomad && ansible-playbook -i ../inventory.yml nomad_cluster.yml --tags pi_fan
