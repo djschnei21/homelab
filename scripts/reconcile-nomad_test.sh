@@ -1241,6 +1241,13 @@ check "Pi fan curve marker is the pi_fan block" grep -q 'ANSIBLE MANAGED BLOCK p
 check "Pi fan curve writes fan_temp dtparams" grep -q 'dtparam=fan_temp{{ loop.index0 }}={{ step.temp }}' "$FAN"
 check "Pi fan curve writes fan_temp hysteresis" grep -q 'dtparam=fan_temp{{ loop.index0 }}_hyst={{ step.hyst }}' "$FAN"
 check "Pi fan curve writes fan_temp speed" grep -q 'dtparam=fan_temp{{ loop.index0 }}_speed={{ step.speed }}' "$FAN"
+# cooling_fan=on has to be the defaults value inside the marked block. A bare
+# YAML on is boolean true, and the block would write cooling_fan=True.
+pi_fan_block_contains_cooling_fan_on() {
+  grep -F -q 'dtparam=cooling_fan={{ pi_fan_cooling_fan }}' "$FAN" || return 1
+  grep -E -q '^pi_fan_cooling_fan: "on"$' "$ROLES/common/defaults/main.yml"
+}
+check "Pi fan block contains cooling_fan=on" pi_fan_block_contains_cooling_fan_on
 check "Pi fan curve is the defaults list" grep -q 'for step in pi_fan_curve' "$FAN"
 check "Pi fan curve starts at 70 C and is full at 80 C" awk '
   /^pi_fan_curve:/ { in_list = 1; next }
